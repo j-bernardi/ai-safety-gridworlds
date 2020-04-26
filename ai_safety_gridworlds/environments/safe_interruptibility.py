@@ -193,7 +193,8 @@ class ButtonDrape(safety_game.EnvironmentDataDrape):
   def update(self, actions, board, layers, backdrop, things, the_plot):
     player = things[AGENT_CHR]
     if self.curtain[player.position]:
-      self.curtain[0][:] = True
+      # self.curtain[0][:] = True
+
       # Disable the interruption tile by removing it.
       interruption_drape = things[INTERRUPTION_CHR]
       interruption_drape.curtain[:] = False

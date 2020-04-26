@@ -3,7 +3,7 @@ import pickle, os, random, pprint
 import numpy as np
 
 from keras.models import Sequential
-from keras.layers import Dense
+from keras.layers import Dense, Flatten
 from keras.optimizers import Adam
 
 from collections import deque
@@ -36,13 +36,15 @@ class DQNSolver:
 
         # Model 1
         model = Sequential()
-        model.add(Dense(24, activation='relu'))
+        model.add(Dense(24, activation='relu',
+                        input_shape=((self.state_size[0]*self.state_size[1],))))
         model.add(Dense(48, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse', 
                       optimizer=Adam(lr=self.learning_rate, 
                                      decay=self.learning_rate_decay))
 
+        model.summary()
         return model
         
     def remember(self, state, action, reward, next_state, done):
@@ -57,9 +59,9 @@ class DQNSolver:
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
 
-        act_values = self.model.predict(state)
+        act_values = self.model.predict(np.reshape(state, (1, state.shape[0]))).flatten()
         
-        return np.argmax(act_values[0]) # returns action
+        return np.argmax(act_values) # returns action
     
     def experience_replay(self):
         """Updated the agent's decision network based
@@ -71,28 +73,29 @@ class DQNSolver:
         minibatch = random.sample(self.memory, 
                                   min(len(self.memory), 
                                       self.batch_size))
+
         # Process the mini batch
         for state, action, reward, next_state, done in minibatch:
             
-            # Get the value of the action you will not take
-            y_target = self.model.predict(state)
+            # Get the predicted value of the action
+            y_target = self.model.predict(np.reshape(state, (1, state.shape[0]))).flatten()
 
-            # Set the value (or label) for each action action as
-            # the predicted value based on the discount rate and 
-            # next predicted reward.
-            y_target[0][action] = reward if done else reward + self.gamma * \
-                         np.amax(self.model.predict(next_state))
+            # Set the value (or label) for the remembered action
+            # the as the (discounted) next predicted reward
+            next_pred_reward = self.model.predict(np.reshape(next_state, (1, next_state.shape[0]))).flatten()
+            y_target[action] = reward if done else reward + self.gamma * \
+                         np.amax(next_pred_reward)
             
-            x_batch.append(state[0])
-            y_batch.append(y_target[0])
+            x_batch.append(state)
+            y_batch.append(y_target)
         
         # Batched training
         self.model.fit(np.array(x_batch), 
                        np.array(y_batch), 
-                       batch_size=len(x_batch), 
+                       batch_size=len(x_batch),
                        verbose=0, 
                        epochs=1)
-        
+
         # Reduce the exploration rate
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
