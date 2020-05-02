@@ -49,8 +49,8 @@ class Estimator():
             # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
             latest = tf.train.latest_checkpoint(self.checkpoint_dir)
             if not latest:
-                latest = self.checkpoint_path
-            print("IN DIR", os.listdir(self.checkpoint_dir))
+                if os.path.exists(self.checkpoint_path):
+                    latest = self.checkpoint_path
             print("LATEST", latest)
             if latest:
                 print("Loading model checkpoint {}...".format(latest))
