@@ -11,7 +11,7 @@ import tensorflow as tf
 import keras
 from keras.layers import (Conv2D, Dense, Flatten)
 from collections import deque, namedtuple
-import datetime
+import datetime, pickle, pprint
 
 
 # %% Estimator
@@ -33,31 +33,7 @@ class Estimator():
         
         # Load a previous checkpoint if we find one
         if experiment_dir and checkpoint:
-
-            self.checkpoint_dir = os.path.join(experiment_dir, self.model_name + "_checkpoints")
-            self.checkpoint_path = os.path.join(self.checkpoint_dir, "latest.ckpt")
-            
-            if not os.path.exists(self.checkpoint_dir):
-                os.makedirs(self.checkpoint_dir)
-
-            # TODO - customise so that an additional .txt file or something dumps global_state
-            self.cp_callback = keras.callbacks.ModelCheckpoint(filepath=self.checkpoint_path,
-                                                               save_weights_only=True,
-                                                               verbose=0,
-                                                               period=1)
-            
-            # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
-            latest = tf.train.latest_checkpoint(self.checkpoint_dir)
-            if not latest:
-                if os.path.exists(self.checkpoint_path):
-                    latest = self.checkpoint_path
-            print("LATEST", latest)
-            if latest:
-                print("Loading model checkpoint {}...".format(latest))
-                self.model.load_weights(latest)
-                print("Global steps so far NOT IMPLEMENTED")
-            else:
-                print("Initializing model from scratch")
+            self.load_and_set_cp(experiment_dir)
         else:
             self.cp_callback = None
 
@@ -111,6 +87,29 @@ class Estimator():
         reduced_loss = tf.math.reduce_mean(losses)
         return reduced_loss
 
+    def load_and_set_cp(self, experiment_dir):
+        self.checkpoint_dir = os.path.join(experiment_dir, self.model_name + "_checkpoints")
+        self.checkpoint_path = os.path.join(self.checkpoint_dir, "latest.ckpt")
+        
+        if not os.path.exists(self.checkpoint_dir):
+            os.makedirs(self.checkpoint_dir)
+
+        # TODO - customise so that an additional .txt file or something dumps global_state
+        self.cp_callback = keras.callbacks.ModelCheckpoint(filepath=self.checkpoint_path,
+                                                           save_weights_only=True,
+                                                           verbose=0,
+                                                           period=1)
+        
+        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
+        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
+        if not latest:
+            if os.path.exists(self.checkpoint_path):
+                latest = self.checkpoint_path
+        if latest:
+            print("Loading model checkpoint {}...".format(latest))
+            self.model.load_weights(latest)
+        else:
+            print("Initializing model from scratch")
 
 
 def make_epsilon_greedy_policy(estimator, nA):
@@ -160,6 +159,10 @@ class DQNAgent():
         self.actions_num = actions_num
         self.frames_state = frames_state
         
+        self.experiment_dir = experiment_dir
+        self.dict_loc = self.experiment_dir + "/param_dict.p"
+
+
         # Estimator for Q value
         self.q = Estimator(actions_num, 
                            x_shape=world_shape[0], 
@@ -191,7 +194,12 @@ class DQNAgent():
         # TODO - what is it?
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
         
+        self.solved_on = None
         self.total_t = 0
+        self.scores, self.ep_lengths, self.losses = [], [], []
+
+        # RETREIVE PROGESS
+        self.load()
 
         self.new_episode()
         
@@ -259,28 +267,26 @@ class DQNAgent():
         minibatch = random.sample(self.replay_memory, 
                                   sample_size)
 
-        x_batch, y_batch = [], []
+        sample = np.random.choice(len(self.replay_memory), self.batch_size)
+        sample = [self.replay_memory[i] for i in sample]
 
-        for state, action, reward, next_state, done in minibatch:
-
-            # Predicted value of the current action
-            y_target = self.target_q.model.predict(np.reshape(state, (1, *state.shape))).flatten()
-            
-            # Manually set the taken action value to the actual reward
-            next_pred_reward = self.target_q.model.predict(np.reshape(next_state, (1, *next_state.shape))).flatten()
-
-            # Manually set the actual reward
-            y_target[action] = reward if done else reward + self.discount_factor * np.amax(next_pred_reward)
-
-            x_batch.append(state)
-            y_batch.append(y_target)
+        sts, a, r, n_sts, d = tuple(map(np.array, zip(*sample)))
+        
+        # The target q values, given the state
+        qs_targets_from_state = self.target_q.model.predict(sts)
+        
+        # Update the action taken value to what was actually achieved plus prediction
+        qs_predicted_on_next = self.target_q.model.predict(n_sts).max(axis=1)
+        qs_predicted_on_next[d] = 0
+        
+        qs_targets_from_state[:,a] = r + self.discount_factor * qs_predicted_on_next
 
         cbks = [self.q.cp_callback] if hasattr(self.q, "cp_callback") else []
 
         # Batched training
-        info = self.q.model.fit(np.array(x_batch), 
-                                np.array(y_batch), 
-                                batch_size=len(x_batch),
+        info = self.q.model.fit(sts, 
+                                qs_targets_from_state, 
+                                batch_size=len(sts),
                                 verbose=0, 
                                 epochs=1,
                                 callbacks=cbks)
@@ -291,3 +297,58 @@ class DQNAgent():
             self.new_episode()
 
         return info.history['loss'][0]
+
+    def save(self):
+
+        if os.path.exists(self.dict_loc):
+            with open(self.dict_loc, 'rb') as df:
+                loaded_dict = pickle.load(df)
+            solved_on = loaded_dict["solved_on"]
+        else:
+            solved_on = self.solved_on
+
+        save_dict = {"experiment_dir": self.experiment_dir,
+                     "total_t": self.total_t,
+                     "solved_on": solved_on,
+                     "losses": self.losses,
+                     "scores": self.scores,
+                     "ep_lengths": self.ep_lengths}
+
+        with open(self.dict_loc, 'wb') as df:
+            pickle.dump(save_dict, df)
+
+    def load(self):
+
+        if not os.path.exists(self.dict_loc):
+            print("Nothing saved at ", self.dict_loc, "yet!")
+            return False
+
+        with open(self.dict_loc, 'rb') as df:
+            loaded_dict = pickle.load(df)
+
+        self.q.load_and_set_cp(loaded_dict["experiment_dir"])
+
+        self.total_t = loaded_dict["total_t"]
+        self.solved_on = loaded_dict["solved_on"]
+        self.losses = loaded_dict["losses"]
+        self.ep_lengths = loaded_dict["ep_lengths"]
+        self.scores = loaded_dict["scores"]
+
+        return True
+
+    def display_param_dict(self):
+        if os.path.exists(self.dict_loc):
+            with open(self.dict_loc, 'rb') as df:
+                loaded_dict = pickle.load(df)
+            
+            to_display_dict = loaded_dict.copy()
+
+            for k in ("losses", "ep_lengths", "scores"):
+                to_display_dict[k] = str(len(loaded_dict[k])) + " items"
+
+            pprint.pprint(to_display_dict)
+
+        else:
+            print("No params saved yet!")
+
+

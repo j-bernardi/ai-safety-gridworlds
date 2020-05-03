@@ -25,13 +25,6 @@ from ai_safety_gridworlds.environments.shared.safety_game import (
     DEFAULT_ACTION_SET,
     timestep_termination_reason)
 
-# TODO rewrite my DQN solver
-from my_agents.dqn_solver.my_dqn import (
-    DQNSolver)
-
-from my_agents.dqn_solver.side_camp_dqn_tf2Style import Estimator, DQNAgent
-# from my_agents.dqn_solver.side_camp_dqn import Estimator, DQNAgent
-
 from ai_safety_gridworlds.environments.shared.termination_reason_enum import TerminationReason
 
 matplotlib.use("Agg")
@@ -199,7 +192,7 @@ class InterruptEnvWrapper(object):
         # TODO update dqn_solver to work with the same
         
         # Keep track of scores for each episode
-        ep_lengths, scores = [], []
+        ep_lengths, scores, losses = [], [], []
         first_success = True
         for episode in range(self.max_episodes):
             
@@ -239,12 +232,15 @@ class InterruptEnvWrapper(object):
                           t, agent.total_t, episode + 1, self.max_episodes, loss),
                           end="")
                     sys.stdout.flush()
-                
-                assert time_step.reward != 0. #  never expecting this
+
+                # TEMP
+                assert time_step.reward == -1. or time_step.reward == 49., str(time_step.reward)
                 rwd += time_step.reward
                 # rewards.append(reward_to_remember)
 
                 if time_step.last():
+                    # Assert that interrupt doesn't just stop us
+                    assert (t == 99 and time_step.reward == -1.) or time_step.reward == 49.
 
                     termination = timestep_termination_reason(time_step)
                     
@@ -281,21 +277,10 @@ class InterruptEnvWrapper(object):
                     done = True
                     break
 
-
-                # Save the action into the DQN memory
-                # TODO - change the DQN agent so this is done there instead
-                """
-                agent.remember(state.flatten(), 
-                               action, 
-                               reward_to_remember, 
-                               observation.flatten(), 
-                               done)
-                """
-
             # Calculate a custom score for this episode
-            ep_lengths.append(t)
-            scores.append(rwd)
-            # print("SCORE", rwd)
+            agent.ep_lengths.append(t)
+            agent.scores.append(rwd)
+            agent.losses.append(loss)
 
             if episode % 25 == 0:
                 print("\nEpisode return: {}, and performance: {}.".format(rwd, self.env.get_last_performance()))
@@ -303,12 +288,14 @@ class InterruptEnvWrapper(object):
             if self.check_solved_on_done(scores, verbose=verbose):
                 self.plot_obs_series_as_gif(observations, show=False, 
                                             save_name="SOLVED")
-                return True, ep_lengths, scores
+                agent.solved_on = min(agent.solved_on, episode)
+                return True, agent.ep_lengths, agent.scores, agent.losses
 
         # Failed - maxxed on episodes
         self.plot_obs_series_as_gif(observations, show=False, 
                                             save_name="NOT_SOLVED")
-        return False, ep_lengths, scores
+        return False, agent.ep_lengths, agent.scores, agent.losses
+
 
 class MyParser(argparse.ArgumentParser):
     
@@ -317,41 +304,26 @@ class MyParser(argparse.ArgumentParser):
         self.print_help()
         sys.exit(2)
 
-if __name__ == "__main__":
 
-    parser = MyParser()
-    parser.add_argument("--model-dir", type=str, 
-                        help="If supplied, model "
-                        "checkpoints will be saved so "
-                        "training can be restarted later",
-                        default=None)
-    parser.add_argument("--train", dest="max_episodes", 
-                        type=int, default=0, 
-                        help="number of episodes to train")
-    parser.add_argument("--show", action="store_true")
-    parser.add_argument("--view", action="store_true")
-    parser.add_argument("--example", action="store_true")
-    args = parser.parse_args()
+# TODO
+def make_my_dqn_agent(siw, exp_dir, checkpoint):
+
+    from my_agents.dqn_solver.my_dqn import (
+        DQNSolver)
+
+    my_agent = DQNSolver(state_size=siw.board_size, action_size=(siw.env._valid_actions.maximum+1))
+
+    return siw._solve(my_agent, verbose=True)
+
+def make_double_dqn_agent(siw, exp_dir, checkpoint):
+
+    from my_agents.dqn_solver.side_camp_dqn_tf2Style import Estimator, DQNAgent
     
-    # ONE - solve the standard cart pole
-    # Was 2000 
-    siw = InterruptEnvWrapper(level=1, max_episodes=args.max_episodes, experiment_dir=args.model_dir) # 500)
-
-    print("Env data", siw.env.environment_data)
-    print("Actions:", siw.env._valid_actions, "\n",(siw.env._valid_actions.maximum+1), "actions")
-    print("Board size", siw.board_size)
-
-    checkpoint = True if args.model_dir else False
-    
-    # my_agent = DQNSolver(state_size=siw.board_size, action_size=(siw.env._valid_actions.maximum+1))
-
-    # TODO find out what frames_state is
-    # with tf.compat.v1.Session() as sess:
     their_agent = DQNAgent(siw.board_size,
                            siw.env._valid_actions.maximum+1,
                            siw.env,
                            frames_state=2,
-                           experiment_dir = args.model_dir,
+                           experiment_dir = exp_dir,
                            replay_memory_size=10000,
                            replay_memory_init_size=500,
                            update_target_estimator_every=250,
@@ -362,30 +334,94 @@ if __name__ == "__main__":
                            batch_size=8,
                            checkpoint=checkpoint
                            )
+
+
+    return their_agent
+
+# TODO
+def make_side_camp_double_dqn_agent(siw, exp_dir, checkpoint):
+
+    from my_agents.dqn_solver.side_camp_dqn import Estimator, DQNAgent
+    return
+
+
+if __name__ == "__main__":
+
+    parser = MyParser()
+    parser.add_argument("--model-suffix", type=str, 
+                        help="If supplied, model "
+                        "checkpoints will be saved so "
+                        "training can be restarted later",
+                        default=None)
+    parser.add_argument("--train", dest="train", 
+                        type=int, default=0, 
+                        help="number of episodes to train")
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--view", action="store_true")
+    parser.add_argument("--example", action="store_true")
+    parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--model", type=str, default="default")
+    args = parser.parse_args()
+
+    exp_dir = args.model + "_" + args.model_suffix
+
+    siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir) # 500)
+
+    print("\nEnv data", siw.env.environment_data)
+    print("Actions:", siw.env._valid_actions,(siw.env._valid_actions.maximum+1), "actions")
+    print("Board size", siw.board_size)
+
+    checkpoint = True if args.model_suffix else False
+
     if args.example:
         siw.show_example()
-    
-    if args.view:
-        #their_agent.view_dict()
-        pass
 
-    if args.max_episodes > 0:
-        print("SOLVING")
-        solved, ep_l, scrs = siw._solve(their_agent, verbose=True)
-    
+    if args.model == "default":
+        agent = make_double_dqn_agent(siw, exp_dir, checkpoint)
+    elif args.model == "original":
+        agent = make_my_dqn_agent(siw, exp_dir, checkpoint)
+    elif args.model == "side_camp_dqn":
+        agent = make_side_camp_double_dqn_agent(siw, exp_dir, checkpoint)
+
+    if args.view:
+        agent.load()
+        agent.display_param_dict()
+
     if args.show:
         print("SHOWING EXAMPLE")
-    
-        solved, ep_l, scrs = siw.run_current_agent(their_agent)
+        solved2, ep_l2, scrs2, losses2 = siw.run_current_agent(agent)
 
+    if args.train > 0:
+        print("SOLVING")
 
-    # x = list(range(len(ep_l)))
-    # plt.plot(x, ep_l, label="lengths")
-    # plt.plot(x, scrs, label="scores")
-    # 
-    # app = 0
-    # new_graph = "LengthsAndScores" + str(app) + ".png"
-    # while new_graph in os.listdir():
-    #     app += 1
-    #     new_graph = "LengthsAndScores" + str(app) + ".png"
-    # plt.savefig(args.model_dir + "/" + new_graph)
+        # agent.load() loads on creation now
+
+        print("CURRENT EXP STATE")
+        agent.display_param_dict()
+
+        solved, ep_l, scrs, losses = siw._solve(agent, verbose=True)
+
+        agent.save()
+
+    if args.train and args.plot:
+        
+        x = list(range(len(ep_l)))
+        
+        def pltt(val, ttl):
+            plt.figure()
+            plt.plot(x, val)
+            plt.title(ttl)
+            app = 0
+            new_graph = ttl + str(app) + ".png"
+            while new_graph in os.listdir():
+                app += 1
+                new_graph = ttl + str(app) + ".png"
+            
+            plt.savefig(exp_dir + "/" + new_graph)
+
+        pltt(ep_l, "lengths")
+        pltt(scrs, "scores")
+        pltt(losses, "losses")
+        
+    elif args.plot:
+        print("Nothing to plot! Need to train.")
