@@ -3,16 +3,19 @@
 
 from __future__ import print_function
 import itertools
-import numpy as np
 import os
 import random
 import sys
+import datetime
+import numpy as np
 import tensorflow as tf
+from collections import deque, namedtuple
+
 import keras
 from keras.layers import (Conv2D, Dense, Flatten)
-from collections import deque, namedtuple
-import datetime, pickle, pprint
 
+from my_agents.dqn_solver.standard_agent import (
+    StandardAgent, EpisodeStats, Transition)
 
 # %% Estimator
 class Estimator():
@@ -130,19 +133,16 @@ def make_epsilon_greedy_policy(estimator, nA):
         return A
     return policy_fn
 
-EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
-Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
-
 
 # %% DQNAgent
-class DQNAgent():
+class DQNAgent(StandardAgent):
     """
     DQNAgent adjusted to ai-safety-gridworlds.
     """
-    def __init__(self,
-                 world_shape,
+    def __init__(self, 
+                 world_shape, 
                  actions_num,
-                 env,
+                 env, 
                  frames_state=2,
                  experiment_dir=None,
                  replay_memory_size=1500,
@@ -155,19 +155,13 @@ class DQNAgent():
                  batch_size=32,
                  checkpoint=False):
 
-        self.world_shape = world_shape
-        self.actions_num = actions_num
-        self.frames_state = frames_state
-        
-        self.experiment_dir = experiment_dir
-        self.dict_loc = self.experiment_dir + "/param_dict.p"
-
+        self.update_target_estimator_every = update_target_estimator_every
 
         # Estimator for Q value
         self.q = Estimator(actions_num, 
                            x_shape=world_shape[0], 
                            y_shape=world_shape[1], 
-                           frames_state=self.frames_state,
+                           frames_state=frames_state,
                            name="q",
                            checkpoint=checkpoint,
                            experiment_dir=experiment_dir)
@@ -176,68 +170,23 @@ class DQNAgent():
         self.target_q = Estimator(actions_num, 
                                   x_shape=world_shape[0], 
                                   y_shape=world_shape[1], 
-                                  frames_state=self.frames_state,
+                                  frames_state=frames_state,
                                   name="target_q",
                                   checkpoint=False,
                                   experiment_dir=experiment_dir)
-        
-        # self.sp = StateProcessor(world_shape[0], world_shape[1])
-        
-        self.replay_memory = deque(maxlen=replay_memory_size) # []
-        # self.replay_memory_size = replay_memory_size
-        self.epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
-        self.epsilon_decay_steps = epsilon_decay_steps
-        self.update_target_estimator_every = update_target_estimator_every
-        self.discount_factor = discount_factor
-        self.batch_size = batch_size
-        
         # TODO - what is it?
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
+
+        # Now that network to save (q) has been defined, call super
+        super(DQNAgent, self).__init__(world_shape, actions_num, env, 
+                         frames_state, experiment_dir, 
+                         replay_memory_size, replay_memory_init_size, 
+                         update_target_estimator_every, discount_factor, 
+                         epsilon_start, epsilon_end, epsilon_decay_steps, 
+                         batch_size, checkpoint)
+
         
-        self.solved_on = None
-        self.total_t = 0
-        self.scores, self.ep_lengths, self.losses = [], [], []
-
-        # RETREIVE PROGESS
-        self.load()
-
-        self.new_episode()
         
-        time_step = env.reset()
-        
-        state = self.get_state(time_step.observation)
-        
-        # Initialise the replay memory
-        for i in range(replay_memory_init_size):
-            action = self.act(time_step.observation, eps=0.95)
-            time_step = env.step(action)
-            next_state = self.get_state(time_step.observation)
-            done = time_step.last()
-
-            assert state is not None
-            assert next_state is not None
-            self.replay_memory.append(Transition(state, action, time_step.reward, next_state, done))
-            if done:
-                time_step = env.reset()
-                self.new_episode()
-                state = self.get_state(time_step.observation)
-            else:
-                state = next_state
-
-    def new_episode(self):
-        self.loss = None
-        self.prev_state = None
-
-    def get_state(self, obs):
-        frame = np.moveaxis(obs['RGB'], 0, -1)
-        # frame = self.sp.process(self.sess, frame)
-        frame = tf.squeeze(tf.image.rgb_to_grayscale(frame))
-        if self.prev_state is None:
-            state = np.stack([frame] * self.frames_state, axis=2)
-        else:
-            state = np.stack([self.prev_state[:,:,self.frames_state - 1], frame], axis=2)
-        float_state = state.astype('float32') / 255.0
-        return float_state
 
     def act(self, obs, eps=None):
         if eps is None:
@@ -298,57 +247,5 @@ class DQNAgent():
 
         return info.history['loss'][0]
 
-    def save(self):
-
-        if os.path.exists(self.dict_loc):
-            with open(self.dict_loc, 'rb') as df:
-                loaded_dict = pickle.load(df)
-            solved_on = loaded_dict["solved_on"]
-        else:
-            solved_on = self.solved_on
-
-        save_dict = {"experiment_dir": self.experiment_dir,
-                     "total_t": self.total_t,
-                     "solved_on": solved_on,
-                     "losses": self.losses,
-                     "scores": self.scores,
-                     "ep_lengths": self.ep_lengths}
-
-        with open(self.dict_loc, 'wb') as df:
-            pickle.dump(save_dict, df)
-
-    def load(self):
-
-        if not os.path.exists(self.dict_loc):
-            print("Nothing saved at ", self.dict_loc, "yet!")
-            return False
-
-        with open(self.dict_loc, 'rb') as df:
-            loaded_dict = pickle.load(df)
-
+    def load_net_weights(self, loaded_dict):
         self.q.load_and_set_cp(loaded_dict["experiment_dir"])
-
-        self.total_t = loaded_dict["total_t"]
-        self.solved_on = loaded_dict["solved_on"]
-        self.losses = loaded_dict["losses"]
-        self.ep_lengths = loaded_dict["ep_lengths"]
-        self.scores = loaded_dict["scores"]
-
-        return True
-
-    def display_param_dict(self):
-        if os.path.exists(self.dict_loc):
-            with open(self.dict_loc, 'rb') as df:
-                loaded_dict = pickle.load(df)
-            
-            to_display_dict = loaded_dict.copy()
-
-            for k in ("losses", "ep_lengths", "scores"):
-                to_display_dict[k] = str(len(loaded_dict[k])) + " items"
-
-            pprint.pprint(to_display_dict)
-
-        else:
-            print("No params saved yet!")
-
-
