@@ -325,7 +325,9 @@ if __name__ == "__main__":
                         "checkpoints will be saved so "
                         "training can be restarted later",
                         default=None)
-    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--train", dest="max_episodes", 
+                        type=int, default=0, 
+                        help="number of episodes to train")
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--view", action="store_true")
     parser.add_argument("--example", action="store_true")
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     
     # ONE - solve the standard cart pole
     # Was 2000 
-    siw = InterruptEnvWrapper(level=1, max_episodes=1, experiment_dir=args.model_dir) # 500)
+    siw = InterruptEnvWrapper(level=1, max_episodes=args.max_episodes, experiment_dir=args.model_dir) # 500)
 
     print("Env data", siw.env.environment_data)
     print("Actions:", siw.env._valid_actions, "\n",(siw.env._valid_actions.maximum+1), "actions")
@@ -367,7 +369,7 @@ if __name__ == "__main__":
         #their_agent.view_dict()
         pass
 
-    if args.train:
+    if args.max_episodes > 0:
         print("SOLVING")
         solved, ep_l, scrs = siw._solve(their_agent, verbose=True)
     

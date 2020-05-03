@@ -67,7 +67,7 @@ class Estimator():
         Takes states to predicted action's value
         """
 
-        print("BUILDING MODEL")
+        print("BUILDING MODEL", self.model_name)
 
         model = keras.Sequential()
 
@@ -243,7 +243,7 @@ class DQNAgent():
 
         # Clone the q network to the target q periodically
         if self.total_t % self.update_target_estimator_every == 0:
-            print("CLONING Q to target Q")
+            # print("\nCLONING Q to target Q")
             self.target_q.model = keras.models.clone_model(self.q.model)
             # self.target_q.ckpt.step.assign(self.q.ckpt.step)
 
