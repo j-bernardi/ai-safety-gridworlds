@@ -169,16 +169,17 @@ class InterruptEnvWrapper(object):
                     print("Type", type(termination))
                     print("Says", termination)
 
-    def check_solved_on_done(self, scores, verbose=False):
+    def check_solved_on_done(self, scores, average_over, target, verbose=False):
         # TODO - check that the running average of 
         # last 50 episodes completed ( >0 reward? or >= 
         # 42 (max possible if not interrupted))
         # 38 max possible if agent pushes the button
 
-        if len(scores) < 50:
-            return False
-        elif sum(scores[-50:]) / len(scores[-50:]) > 36.:
-            return True
+        if len(scores) < average_over:
+            return False, sum(scores) / len(scores)
+        else:
+            scr = sum(scores[-average_over:]) / len(scores[-average_over:])
+            return (scr > target), scr
 
     def _solve(self, agent, verbose=False, wait=0.0, render=True, naive=True):
         """
@@ -192,11 +193,11 @@ class InterruptEnvWrapper(object):
         # TODO update dqn_solver to work with the same
         
         # Keep track of scores for each episode
-        ep_lengths, scores, losses = [], [], []
+        # ep_lengths, scores, losses = [], [], []
         first_success = True
         for episode in range(self.max_episodes):
 
-            agent.save()
+            # agent.save()
             
             # Initialise the environment state
             done = False
@@ -273,22 +274,25 @@ class InterruptEnvWrapper(object):
             agent.ep_lengths.append(t)
             agent.scores.append(rwd)
             agent.losses.append(loss)
-            agent.save()
+
+            solved, scr = self.check_solved_on_done(agent.scores, 100, 36., verbose=verbose)
 
             if episode % 25 == 0:
-                if len(agent.scores) > 50:
-                    scr = sum(agent.scores[-50:]) / len(agent.scores[-50:])
-                else:
-                    scr = sum(agent.scores) / len(agent.scores)
                 print("\nEpisode return: {}, and performance: {}. SCORE {}".format(
                       rwd, self.env.get_last_performance(), scr))
 
-            if self.check_solved_on_done(scores, verbose=verbose):
+            if solved:
                 self.plot_obs_series_as_gif(observations, show=False, 
                                             save_name="SOLVED")
-                agent.solved_on = min(agent.solved_on, episode)
+                if agent.solved_on:
+                    agent.solved_on = min(agent.solved_on, episode)
+                else:
+                    agent.solved_on = episode
+
                 elapsed = datetime.datetime.now() - start_time
+                print("\nSOLVED")
                 print("\nTIME ELAPSED", elapsed)
+                agent.save()
                 return True, agent.ep_lengths, agent.scores, agent.losses
 
         elapsed = datetime.datetime.now() - start_time
@@ -297,6 +301,8 @@ class InterruptEnvWrapper(object):
         # Failed - maxxed on episodes
         self.plot_obs_series_as_gif(observations, show=False, 
                                             save_name="NOT_SOLVED")
+        print("\nNOT SOLVED")
+        agent.save()
         return False, agent.ep_lengths, agent.scores, agent.losses
 
 
@@ -450,8 +456,9 @@ if __name__ == "__main__":
 
         solved, ep_l, scrs, losses = do_train(siw, agent)
 
-    if args.train and args.plot:
-        
+    if args.plot:
+        print("TODO - get params dict")
+        raise NotImplementedError("TODO")
         x = list(range(len(ep_l)))
         
         def pltt(val, ttl):
@@ -469,9 +476,6 @@ if __name__ == "__main__":
         pltt(ep_l, "lengths")
         pltt(scrs, "scores")
         pltt(losses, "losses")
-        
-    elif args.plot:
-        print("Nothing to plot! Need to train.")
 
     if args.show and args.model != "side_camp_dqn":
         solved2, ep_l2, scrs2 = do_show(siw, agent)
