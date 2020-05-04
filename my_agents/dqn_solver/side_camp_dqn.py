@@ -12,6 +12,24 @@ import keras
 from collections import deque, namedtuple
 import datetime
 
+from my_agents.dqn_solver.standard_agent import (
+    StandardAgent, EpisodeStats, Transition, StandardEstimator)
+
+
+# class CustomSaveCallback(tf.keras.callbacks.Callback):
+#     
+#     def __init__(self, filepath, sess, saver, verbose=0):
+# 
+#         self.filepath = filepath
+#         self.verbose = verbose
+#         self.saver = saver
+#         self.sess = sess
+# 
+#     def on_train_batch_end(self, step, logs=None):
+#         if verbose > 0:
+#             print("Saving model to", self.filepath)
+#         self.saver.save(self.sess, self.filepath, global_step=step)
+
 
 # %% StateProcessor
 class StateProcessor():
@@ -39,37 +57,38 @@ class StateProcessor():
 
 
 # %% Estimator
-class Estimator():
+class Estimator(StandardEstimator):
     """
     Q-Value Estimator neural network.
     This network is used for both the Q-Network and the Target Network.
     """
 
-    def __init__(self, actions_num, x_size, y_size, global_step, frames_state=2, scope="estimator"):
-        self.scope = scope # TODO - what is?
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, name="estimator", experiment_dir=None, checkpoint=False):
+
+        self.scope = name
+        self.model_name = name
         self.actions_num = actions_num
-        self.x_size = x_size
-        self.y_size = y_size
-        self.frames_state = frames_state # TODO - what is?
-        self.global_step = global_step
-        # self.global_step = tf.Variable(0, trainable=False, name='global_step')
-        # self.sess = tf.compat.v1.Session()
-        # self.sess.run(self.global_step.initializer)
+        self.x_shape = x_shape 
+        self.y_shape = y_shape
+        self.frames_state = frames_state
+    
         # Writes Tensorboard summaries to disk
-        with tf.compat.v1.variable_scope(scope):
-            # Build the graph
+        #self.global_step = tf.Variable(0, name=self.model_name + "_global_step", 
+        #                               trainable=False)
+        
+        with tf.compat.v1.variable_scope(self.scope):
             self._build_model()
+            
 
     def _build_model(self):
-        """
-        Builds the Tensorflow graph.
-        """
+        # Builds the Tensorflow graph.
+        
 
-        print("BUILDING MODEL")
+        print("\nBUILDING MODEL", self.model_name)
 
         # Placeholders for our input
         # Our input are FRAMES_STATE RGB frames of shape of the gridworld
-        self.X_pl = tf.compat.v1.placeholder(shape=[None, self.x_size, self.y_size,
+        self.X_pl = tf.compat.v1.placeholder(shape=[None, self.x_shape, self.y_shape,
                                              self.frames_state], dtype=tf.uint8, name="X")
         # The TD target value
         self.y_pl = tf.compat.v1.placeholder(shape=[None], dtype=tf.float32, name="y")
@@ -100,11 +119,11 @@ class Estimator():
         self.predictions = tf.compat.v1.layers.dense(fc1, self.actions_num)
 
         # Get the predictions for the chosen actions only
-        print("PREDICTIONS ALL", self.predictions.shape)
+        # print("PREDICTIONS ALL", self.predictions.shape)
         # Indices of the taken actions from the flattened predictions (e.g. an argmax per)
         gather_indices = tf.range(batch_size) * tf.shape(self.predictions)[1] + self.actions_pl
         self.action_predictions = tf.gather(tf.reshape(self.predictions, [-1]), gather_indices)
-        print("ACTION PREDICTIONS", self.action_predictions.shape)
+        # print("ACTION PREDICTIONS", self.action_predictions.shape)
 
         # Calcualte the loss
         self.losses = tf.compat.v1.squared_difference(self.y_pl, self.action_predictions)
@@ -112,37 +131,41 @@ class Estimator():
 
         # Optimizer Parameters from original paper
         self.optimizer = tf.compat.v1.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
-        self.train_op = self.optimizer.minimize(self.loss, global_step=self.global_step)
+
+        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.compat.v1.train.get_global_step())
 
     def predict(self, sess, s):
-        """
-        Predicts action values.
-        Args:
-          sess: Tensorflow session
-          s: State input of shape [batch_size, FRAMES_STATE, 160, 160, 3]
-        Returns:
-          Tensor of shape [batch_size, actions_num] containing the estimated
-          action values.
-        """
+        #Predicts action values.
+        #Args:
+        #  sess: Tensorflow session
+        #  s: State input of shape [batch_size, FRAMES_STATE, 160, 160, 3]
+        #Returns:
+        #  Tensor of shape [batch_size, actions_num] containing the estimated
+        #  action values.
+
         return sess.run(self.predictions, { self.X_pl: s })
 
     def update(self, sess, s, a, y):
-        """
-        Updates the estimator towards the given targets.
-        Args:
-          sess: Tensorflow session object
-          s: State input of shape [batch_size, FRAMES_STATE, 160, 160, 3]
-          a: Chosen actions of shape [batch_size]
-          y: Targets of shape [batch_size]
-        Returns:
-          The calculated loss on the batch.
-        """
+        #Updates the estimator towards the given targets.
+        #Args:
+        #  sess: Tensorflow session object
+        #  s: State input of shape [batch_size, FRAMES_STATE, 160, 160, 3]
+        #  a: Chosen actions of shape [batch_size]
+        #  y: Targets of shape [batch_size]
+        #Returns:
+        #  The calculated loss on the batch.
+
+
         feed_dict = { self.X_pl: s, self.y_pl: y, self.actions_pl: a }
         global_step, _, loss = sess.run(
-                        [self.global_step, 
+                        [tf.compat.v1.train.get_global_step(), 
                          self.train_op, self.loss],
                         feed_dict)
+        
         return loss
+
+    def load_and_set_cp(self):
+        raise NotImplementedError("Not used in this version")
 
 
 # %% helper functions
@@ -186,109 +209,54 @@ def make_epsilon_greedy_policy(estimator, nA):
     return policy_fn
 
 
-EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
-Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
-
-
 # %% DQNAgent
-class DQNAgent():
+class DQNAgent(StandardAgent):
     """
     DQNAgent adjusted to ai-safety-gridworlds.
     """
-    def __init__(self,
-                 sess,
-                 world_shape,
-                 actions_num,
-                 env,
-                 frames_state=2,
-                 experiment_dir=None,
-                 replay_memory_size=1500,
-                 replay_memory_init_size=500,
-                 update_target_estimator_every=250,
-                 discount_factor=0.99,
-                 epsilon_start=1.0,
-                 epsilon_end=0.1,
-                 epsilon_decay_steps=50000,
-                 batch_size=32):
+    def __init__(self, sess, world_shape, actions_num, env, frames_state=2, experiment_dir=None, replay_memory_size=1500, replay_memory_init_size=500, update_target_estimator_every=250, discount_factor=0.99, epsilon_start=1.0, epsilon_end=0.1, epsilon_decay_steps=50000, batch_size=32, checkpoint=False):
 
-        self.world_shape = world_shape
-        self.actions_num = actions_num
-        self.frames_state = frames_state
-        self.global_step_q = tf.Variable(0, name='global_step_q', trainable=False)
-        self.global_step_target_q = tf.Variable(0, name='global_step_target_q', trainable=False)
+        # self.replay_memory_size = replay_memory_size
+        self.update_target_estimator_every = update_target_estimator_every
+        # self.global_step_q = tf.Variable(0, name='global_step_q', trainable=False)
+        # self.global_step_target_q = tf.Variable(0, name='global_step_target_q', trainable=False)
         
+        self.global_step = tf.compat.v1.train.create_global_step() #tf.compat.v1.Variable(0, trainable=False, dtype=tf.uint8)
+
         # Estimator for Q value
-        self.q = Estimator(actions_num, world_shape[0], world_shape[1],
-                           self.global_step_q, frames_state=frames_state, 
-                           scope="q")
+        self.q = Estimator(actions_num, 
+                           world_shape[0],
+                           world_shape[1],
+                           frames_state=frames_state, 
+                           name="q",
+                           experiment_dir=experiment_dir,
+                           checkpoint=checkpoint)
 
         # Estimator for the target Q value
-        self.target_q = Estimator(actions_num, world_shape[0], world_shape[1], 
-                                  self.global_step_target_q, 
+        self.target_q = Estimator(actions_num,
+                                  world_shape[0],
+                                  world_shape[1], 
                                   frames_state=frames_state, 
-                                  scope="target_q")
+                                  name="target_q",
+                                  experiment_dir=experiment_dir,
+                                  checkpoint=False)
         
         self.sp = StateProcessor(world_shape[0], world_shape[1])
-        
-        self.replay_memory = []
-        self.replay_memory_size = replay_memory_size
-        self.epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
-        self.epsilon_decay_steps = epsilon_decay_steps
-        self.update_target_estimator_every = update_target_estimator_every
-        self.discount_factor = discount_factor
-        self.batch_size = batch_size
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
+
         self.sess = sess
         self.sess.run(tf.compat.v1.global_variables_initializer())
-        self.total_t = 0
 
         self.saver = tf.compat.v1.train.Saver()
-        
-        # Load a previous checkpoint if we find one
-        self.experiment_dir = experiment_dir
-        if experiment_dir:
-            self.checkpoint_dir = os.path.join(experiment_dir, "checkpoints")
-            self.checkpoint_path = os.path.join(self.checkpoint_dir, "model")
-            
-            if not os.path.exists(self.checkpoint_dir):
-                os.makedirs(self.checkpoint_dir)
-            
-            latest_checkpoint = tf.train.latest_checkpoint(self.checkpoint_dir)
-            
-            if latest_checkpoint:
-                
-                print("Loading model checkpoint {}...\n".format(latest_checkpoint))
-                
-                self.saver.restore(self.sess, latest_checkpoint)
 
-                print("Q GLOBAL STATE", self.q.global_step)
-                print("TARGET Q GLOBAL STATE", self.q.global_step)
+        super(DQNAgent, self).__init__(world_shape, actions_num, env, 
+                         frames_state, experiment_dir, 
+                         replay_memory_size, replay_memory_init_size, 
+                         update_target_estimator_every, discount_factor, 
+                         epsilon_start, epsilon_end, epsilon_decay_steps, 
+                         batch_size, checkpoint=checkpoint)
 
-        self.new_episode()
-        
-        time_step = env.reset()
-        
-        state = self.get_state(time_step.observation)
-        
-        for i in range(replay_memory_init_size):
-            action = self.act(time_step.observation, eps=0.95)
-            time_step = env.step(action)
-            next_state = self.get_state(time_step.observation)
-            done = time_step.last()
-
-            assert state is not None
-            assert next_state is not None
-            self.replay_memory.append(Transition(state, action, time_step.reward, next_state, done))
-            if done:
-                time_step = env.reset()
-                self.new_episode()
-                state = self.get_state(time_step.observation)
-            else:
-                state = next_state
-
-    def new_episode(self):
-        self.loss = None
-        self.prev_state = None
+        print("INITIALISED WITH GLOBAL STEP", tf.compat.v1.train.get_global_step())
 
     def get_state(self, obs):
         frame = np.moveaxis(obs['RGB'], 0, -1)
@@ -314,8 +282,6 @@ class DQNAgent():
 
         next_state = self.get_state(time_step.observation)
         done = time_step.last()
-        if len(self.replay_memory) == self.replay_memory_size:
-            self.replay_memory.pop(0)
 
         self.replay_memory.append(Transition(self.prev_state, action,
                                              time_step.reward, next_state, done))
@@ -337,6 +303,20 @@ class DQNAgent():
         return loss
 
     def save(self):
-        if self.experiment_dir:
-            # self.saver.save(tf.compat.v1.get_default_session(), self.checkpoint_path)
-            self.saver.save(tf.compat.v1.get_default_session(), self.checkpoint_path)
+        # Save the dict
+        super(DQNAgent, self).save()
+    
+    def load_q_net_weights(self, loaded_dict):
+
+        # Load a previous checkpoint if we find one
+        
+        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
+        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
+        if not latest:
+            if os.path.exists(self.checkpoint_path):
+                latest = self.checkpoint_path
+        
+        
+        if latest:
+            print("Loading model checkpoint {}...\n".format(latest))
+            self.saver.restore(self.sess, latest)

@@ -2,144 +2,151 @@ import pickle, os, random, pprint
 
 import numpy as np
 
-from keras.models import Sequential
-from keras.layers import Dense, Flatten
-from keras.optimizers import Adam
-
 from collections import deque
 
-class DQNSolver:
+import keras
+
+from my_agents.dqn_solver.standard_agent import (
+    StandardAgent, EpisodeStats, Transition, StandardEstimator)
+
+class Estimator(StandardEstimator):
+    """
+    Q-Value Estimator neural network.
+    This network is used for both the Q-Network and the Target Network.
+    """
+
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, name="estimator", experiment_dir=None, checkpoint=True):
+        super(Estimator, self).__init__(actions_num, 
+                                        x_shape, y_shape, 
+                                        frames_state, 
+                                        name, experiment_dir, 
+                                        checkpoint)
+
+        # Load a previous checkpoint if we find one
+        if experiment_dir and checkpoint:
+            self.checkpoint_dir = os.path.join(experiment_dir, self.model_name + "_checkpoints")
+            self.checkpoint_path = os.path.join(self.checkpoint_dir, "latest.ckpt")
+            if not os.path.exists(self.checkpoint_dir):
+                os.makedirs(self.checkpoint_dir)
+
+            self.load_and_set_cp(experiment_dir)
+            # TODO - customise so that an additional .txt file or something dumps global_state
+            self.cp_callback = keras.callbacks.ModelCheckpoint(filepath=self.checkpoint_path,
+                                                               save_weights_only=True,
+                                                               verbose=0,
+                                                               period=1)
+        else:
+            self.cp_callback = None
+
+
+class DQNSolver(StandardAgent):
     """A standard dqn_solver.
     Implements a simple DNN that predicts values.
     """
     
-    def __init__(self, state_size, action_size):
-        self.state_size = state_size
-        self.action_size = action_size
-        self.memory = deque(maxlen=100000)
-        self.gamma = 1.    # discount rate was 1
-        self.epsilon = 1.0  # exploration rate
-        self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995 # 0.995
-        self.learning_rate = 0.01
-        self.learning_rate_decay = 0.01
-        self.batch_size = 64
-        self.model = self._build_model()
+    def __init__(self, 
+                 world_shape, 
+                 actions_num,
+                 env, 
+                 frames_state=2,
+                 experiment_dir=None,
+                 replay_memory_size=1500,
+                 replay_memory_init_size=500,
+                 update_target_estimator_every=250,
+                 discount_factor=0.99,
+                 epsilon_start=1.0,
+                 epsilon_end=0.1,
+                 epsilon_decay_steps=50000,
+                 batch_size=32,
+                 checkpoint=False):
 
-        self.models_dict_file = "models/models_dict.pickle"
-    
-    def _build_model(self):
-        """Define the network that will instruct the agent on
-        predicting the action with the largest future reward, 
-        based on present state.
-        """
+        self.q = Estimator(actions_num, 
+                           x_shape=world_shape[0], 
+                           y_shape=world_shape[1], 
+                           frames_state=frames_state,
+                           name="q",
+                           experiment_dir=experiment_dir,
+                           checkpoint=checkpoint)
 
-        # Model 1
-        model = Sequential()
-        model.add(Dense(24, activation='relu',
-                        input_shape=((self.state_size[0]*self.state_size[1],))))
-        model.add(Dense(48, activation='relu'))
-        model.add(Dense(self.action_size, activation='linear'))
-        model.compile(loss='mse', 
-                      optimizer=Adam(lr=self.learning_rate, 
-                                     decay=self.learning_rate_decay))
-
-        model.summary()
-        return model
+        # Now that network to save (q) has been defined, call super
+        super(DQNSolver, self).__init__(world_shape, actions_num, env, 
+                         frames_state, experiment_dir, 
+                         replay_memory_size, replay_memory_init_size, 
+                         update_target_estimator_every, discount_factor, 
+                         epsilon_start, epsilon_end, epsilon_decay_steps, 
+                         batch_size, checkpoint)
         
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-    
-    def act(self, state):
+    def act(self, obs, eps=None):
         """Take a random action or the most valuable predicted
         action, based on the agent's model. 
         """
 
         # If in exploration
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
+        if eps is None:
+            eps = self.epsilons[min(self.total_t, 
+                                    self.epsilon_decay_steps-1)]
 
-        act_values = self.model.predict(np.reshape(state, (1, state.shape[0]))).flatten()
-        
-        return np.argmax(act_values) # returns action
+        # Prepare the staet
+        state = self.get_state(obs)
+        if len(state.shape) == 3: 
+            pass_state = np.reshape(state, (1, *state.shape))
+        else:
+            pass_state
+        self.prev_state = state
+
+        if np.random.rand() <= eps:
+            return random.randrange(self.actions_num)
+        else:
+            return np.argmax(self.q.model.predict(pass_state).flatten())
     
-    def experience_replay(self):
+    def learn(self, time_step, action):
         """Updated the agent's decision network based
         on a sample of previous decisions it has seen.
         Here, we combine the target and action networks.
         """
+
+        next_state = self.get_state(time_step.observation)
+        done = time_step.last()
+        self.replay_memory.append(Transition(self.prev_state, action,
+                                             time_step.reward, next_state, done))
+
         x_batch, y_batch = [], []
 
-        minibatch = random.sample(self.memory, 
-                                  min(len(self.memory), 
-                                      self.batch_size))
+        # Assume batch size < initial replay memory size
+        sample = np.random.choice(len(self.replay_memory), self.batch_size)
+        minibatch = [self.replay_memory[i] for i in sample]
 
         # Process the mini batch
         for state, action, reward, next_state, done in minibatch:
             
             # Get the predicted value of the action
-            y_target = self.model.predict(np.reshape(state, (1, state.shape[0]))).flatten()
+            y_target = self.q.model.predict(np.reshape(state, (1, *state.shape))).flatten()
 
             # Set the value (or label) for the remembered action
             # the as the (discounted) next predicted reward
-            next_pred_reward = self.model.predict(np.reshape(next_state, (1, next_state.shape[0]))).flatten()
-            y_target[action] = reward if done else reward + self.gamma * \
-                         np.amax(next_pred_reward)
+            next_pred_reward = self.q.model.predict(np.reshape(next_state, (1, *next_state.shape))).flatten()
+            y_target[action] = reward if done else\
+                               reward + self.discount_factor * np.amax(next_pred_reward)
             
             x_batch.append(state)
             y_batch.append(y_target)
+
+        cbks = [self.q.cp_callback] if hasattr(self.q, "cp_callback") else []
         
         # Batched training
-        self.model.fit(np.array(x_batch), 
-                       np.array(y_batch), 
-                       batch_size=len(x_batch),
-                       verbose=0, 
-                       epochs=1)
+        info = self.q.model.fit(np.array(x_batch), 
+                               np.array(y_batch), 
+                               batch_size=len(x_batch),
+                               verbose=0, 
+                               epochs=1,
+                               callbacks=cbks)
 
-        # Reduce the exploration rate
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+        self.total_t += 1
 
-    def save_model(self, model_name, angle_threshold, x_threshold, training_results, max_episode_steps):
-        """Save a (trained) model with its weights to a specified file.
-        Metadata should be passed to keep information avaialble.
-        """
+        if time_step.last():
+            self.new_episode()
 
-        model_no = 0
-        model_loc = "models/" + model_name + ".h5"
+        return info.history['loss'][0]
 
-        self.model.save_weights(model_loc)
-
-        if os.path.exists(self.models_dict_file):
-            with open(self.models_dict_file, 'rb') as md:
-                models_dict = pickle.load(md)
-        else:
-            models_dict = {}
-
-        models_dict[model_name] =\
-            {"model_location": model_loc,
-             "angle_threshold": angle_threshold,
-             "x_threshold": x_threshold,
-             "training_results": training_results,
-             "max_episode_steps": max_episode_steps}
-
-        with open(self.models_dict_file, 'wb') as md:
-            pickle.dump(models_dict, md)
-
-    def load_model(self, model_name):
-        """Load a model with the specified name"""
-        with open(self.models_dict_file, 'rb') as md:
-            pickled_details = pickle.load(md)
-        
-        desired_model = pickled_details[model_name]
-        self.model.load_weights(desired_model["model_location"])
-    
-    def view_models_dict(self, view=False):
-        """Open the model dict to view what models we have."""
-        with open(self.models_dict_file, 'rb') as md:
-            model_dict = pickle.load(md)
-
-        if view:
-            pprint.pprint(model_dict)
-
-        return model_dict
+    def load_q_net_weights(self, loaded_dict):
+        self.q.load_and_set_cp(loaded_dict["experiment_dir"])

@@ -4,6 +4,10 @@ import pprint
 import numpy as np
 import tensorflow as tf
 from collections import namedtuple, deque
+import keras
+
+from keras.models import Sequential
+from keras.layers import Dense, Flatten, Conv2D
 
 EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
@@ -11,21 +15,7 @@ Transition = namedtuple("Transition", ["state", "action", "reward", "next_state"
 
 class StandardAgent(object):
     
-    def __init__(self,
-                 world_shape,
-                 actions_num,
-                 env,
-                 frames_state=2,
-                 experiment_dir=None,
-                 replay_memory_size=1500,
-                 replay_memory_init_size=500,
-                 update_target_estimator_every=250,
-                 discount_factor=0.99,
-                 epsilon_start=1.0,
-                 epsilon_end=0.1,
-                 epsilon_decay_steps=50000,
-                 batch_size=32,
-                 checkpoint=False):
+    def __init__(self, world_shape, actions_num, env, frames_state=2, experiment_dir=None, replay_memory_size=1500, replay_memory_init_size=500, update_target_estimator_every=250, discount_factor=0.99, epsilon_start=1.0, epsilon_end=0.1, epsilon_decay_steps=50000, batch_size=32, checkpoint=False):
 
         self.world_shape = world_shape
         self.actions_num = actions_num
@@ -45,15 +35,20 @@ class StandardAgent(object):
         self.total_t = 0
         self.scores, self.ep_lengths, self.losses = [], [], []
 
-        # RETREIVE PROGESS
-        self.load()
+        # RETREIVE PROGESS if it exists
+        if checkpoint:
+            self.checkpoint_dir = os.path.join(experiment_dir, "checkpoints")
+            self.checkpoint_path = os.path.join(self.checkpoint_dir, "model")
+            if not os.path.exists(self.checkpoint_dir):
+                print("Making path", self.checkpoint_dir)
+                os.makedirs(self.checkpoint_dir)
+            self.load()
 
         self.new_episode()
         
-        # Initialise the replay memory
+        # Initialise the replay memory with random steps
         self.initialise_replay(env, replay_memory_init_size)
 
-    
     def initialise_replay(self, env, replay_memory_init_size):
         time_step = env.reset()
         state = self.get_state(time_step.observation)
@@ -115,9 +110,11 @@ class StandardAgent(object):
 
         with open(self.dict_loc, 'rb') as df:
             loaded_dict = pickle.load(df)
-
-        self.load_net_weights(loaded_dict)
-
+        
+        # Restore the q net
+        self.load_q_net_weights(loaded_dict)
+        
+        # Restore some params
         self.total_t = loaded_dict["total_t"]
         self.solved_on = loaded_dict["solved_on"]
         self.losses = loaded_dict["losses"]
@@ -126,8 +123,8 @@ class StandardAgent(object):
 
         return True
 
-    def load_net_weights(self):
-        raise NotImplementedError("Needs to be implemented by child")
+    def load_q_net_weights(self):
+        raise NotImplementedError("Needs to be implemented by child class")
 
     def display_param_dict(self):
         if os.path.exists(self.dict_loc):
@@ -145,3 +142,81 @@ class StandardAgent(object):
             print("No params saved yet!")
 
 
+
+class StandardEstimator(object):
+    """
+    Q-Value Estimator neural network.
+    This network is used for both the Q-Network and the Target Network.
+    """
+
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, name="estimator", experiment_dir=None, checkpoint=True):
+        self.model_name = name
+        self.actions_num = actions_num
+        self.x_shape = x_shape 
+        self.y_shape = y_shape
+        self.frames_state = frames_state
+
+        self.model = self._build_model()
+
+    def _build_model(self):
+        """
+        Builds the Tensorflow graph.
+        Takes states to predicted action's value
+        """
+
+        print("BUILDING MODEL", self.model_name)
+
+        model = keras.Sequential()
+
+        # TODO - check float value?
+        # self.X_pl = tf.compat.v1.placeholder(shape=[None, self.x_size, self.y_size,
+        #                                      self.frames_state], dtype=tf.uint8, name="X")
+        # X = tf.compat.v1.to_float(self.X_pl) / 255.0
+
+        model.add(Conv2D(filters=64, kernel_size=2, 
+                         strides=1, padding='SAME', 
+                         activation='relu',
+                         input_shape=(self.x_shape, self.y_shape, self.frames_state)))
+
+        # try with padding = 'VALID'
+        # pool1 = tf.contrib.layers.max_pool2d(conv1, 2)
+        # conv2 = tf.contrib.layers.conv2d(pool1, 32, WX, 1, activation_fn=tf.nn.relu)
+
+        # Fully connected layers
+        model.add(Flatten())
+        model.add(Dense(64, activation='relu'))
+        model.add(Dense(self.actions_num, activation='linear'))
+
+        model.compile(loss=(lambda x, y: self.my_loss(x, y, model)),
+                      optimizer=keras.optimizers.RMSprop(
+                           learning_rate=0.00025,
+                           rho=0.99,
+                           # momentum=0.0,
+                           epsilon=1e-6)
+                     )
+        # model.summary()
+        return model
+
+    def my_loss(self, y_pred, y_true, model):
+
+        # convert model outputs to the vlaue of the chosen action
+        # Others are meaningless
+        actual_qs = tf.math.reduce_max(y_true, axis=1)
+        predicted_qs = tf.math.reduce_max(y_pred, axis=1)
+
+        losses = tf.math.squared_difference(actual_qs, predicted_qs)
+        reduced_loss = tf.math.reduce_mean(losses)
+        return reduced_loss
+
+    def load_and_set_cp(self, experiment_dir):
+        
+        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
+        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
+        if not latest:
+            if os.path.exists(self.checkpoint_path):
+                latest = self.checkpoint_path
+        if latest:
+            print("Loading model checkpoint {}...".format(latest))
+            self.model.load_weights(latest)
+        else:
+            print("Initializing model from scratch")
