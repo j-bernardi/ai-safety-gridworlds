@@ -75,10 +75,11 @@ class Estimator(StandardEstimator):
         # Writes Tensorboard summaries to disk
         #self.global_step = tf.Variable(0, name=self.model_name + "_global_step", 
         #                               trainable=False)
+        if self.model_name == "q":
+            self.global_step = tf.compat.v1.train.create_global_step()
         
         with tf.compat.v1.variable_scope(self.scope):
             self._build_model()
-            
 
     def _build_model(self):
         # Builds the Tensorflow graph.
@@ -132,7 +133,8 @@ class Estimator(StandardEstimator):
         # Optimizer Parameters from original paper
         self.optimizer = tf.compat.v1.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
 
-        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.compat.v1.train.get_global_step())
+        if self.model_name == "q":
+            self.train_op = self.optimizer.minimize(self.loss, global_step=self.global_step)
 
     def predict(self, sess, s):
         #Predicts action values.
@@ -158,10 +160,10 @@ class Estimator(StandardEstimator):
 
         feed_dict = { self.X_pl: s, self.y_pl: y, self.actions_pl: a }
         global_step, _, loss = sess.run(
-                        [tf.compat.v1.train.get_global_step(), 
+                        [self.global_step, 
                          self.train_op, self.loss],
                         feed_dict)
-        
+
         return loss
 
     def load_and_set_cp(self):
@@ -221,7 +223,6 @@ class DQNAgent(StandardAgent):
         # self.global_step_q = tf.Variable(0, name='global_step_q', trainable=False)
         # self.global_step_target_q = tf.Variable(0, name='global_step_target_q', trainable=False)
         
-        self.global_step = tf.compat.v1.train.create_global_step() #tf.compat.v1.Variable(0, trainable=False, dtype=tf.uint8)
 
         # Estimator for Q value
         self.q = Estimator(actions_num, 
@@ -232,6 +233,8 @@ class DQNAgent(StandardAgent):
                            experiment_dir=experiment_dir,
                            checkpoint=checkpoint)
 
+        # self.q.global_step = tf.compat.v1.train.create_global_step() #tf.compat.v1.Variable(0, trainable=False, dtype=tf.uint8)
+        
         # Estimator for the target Q value
         self.target_q = Estimator(actions_num,
                                   world_shape[0],
@@ -256,7 +259,7 @@ class DQNAgent(StandardAgent):
                          epsilon_start, epsilon_end, epsilon_decay_steps, 
                          batch_size, checkpoint=checkpoint)
 
-        print("INITIALISED WITH GLOBAL STEP", tf.compat.v1.train.get_global_step())
+        print("INITIALISED WITH GLOBAL STEP", tf.compat.v1.train.get_global_step().eval())
 
     def get_state(self, obs):
         frame = np.moveaxis(obs['RGB'], 0, -1)
@@ -305,6 +308,9 @@ class DQNAgent(StandardAgent):
     def save(self):
         # Save the dict
         super(DQNAgent, self).save()
+        # Save the session
+        if self.experiment_dir:
+            self.saver.save(self.sess, self.checkpoint_path)
     
     def load_q_net_weights(self, loaded_dict):
 

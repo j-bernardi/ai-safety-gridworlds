@@ -196,7 +196,7 @@ class InterruptEnvWrapper(object):
         first_success = True
         for episode in range(self.max_episodes):
 
-            agent.save()
+            # agent.save()
             
             # Initialise the environment state
             done = False
