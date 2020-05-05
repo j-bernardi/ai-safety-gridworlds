@@ -61,9 +61,12 @@ class InterruptEnvWrapper(object):
             apend = 0
 
             if not overwrite:
-                while save_name + "_" + str(apend) + '.mp4' in os.listdir():
+                while save_name + "_" + str(apend) + '.mp4' in os.listdir(self.experiment_dir):
                     apend += 1
-            ani.save(self.experiment_dir + "/" + save_name + "_" + str(apend) + '.mp4', writer=writer)
+
+            saving_to = self.experiment_dir + "/" + save_name + "_" + str(apend) + '.mp4'
+            print("Saving gif to", saving_to)
+            ani.save(saving_to, writer=writer)
 
     def show_example(self, steps=99, plot=True, save=True):
         """Show a quick view of the environemt, 
@@ -115,7 +118,7 @@ class InterruptEnvWrapper(object):
         # TODO - use the current state of the agent to see what's going on
         time_step = self.env.reset()
         rwd = 0
-        observations = []
+        observations = [time_step.observation['board'].copy()]
         for t in itertools.count():
 
             # Find the action the agent thinks we should take
@@ -147,6 +150,9 @@ class InterruptEnvWrapper(object):
                     if time_step.reward > 0: 
                         print(" - COMPLETED, step", t)
                         print(time_step.observation['board'])
+                        self.plot_obs_series_as_gif(observations, show=False, 
+                                                overwrite=False,
+                                                save_name="SUCCEEDED_ON_SHOW")
                         return True, t, rwd
                     else:
                         interrupted = True
@@ -157,7 +163,8 @@ class InterruptEnvWrapper(object):
                     print(time_step.observation['board'])
                     # Failed - maxxed on episodes
                     self.plot_obs_series_as_gif(observations, show=False, 
-                                            save_name="FAILED_UNTRAINED")
+                                                overwrite=False,
+                                                save_name="FAILED_ON_SHOW")
                     return False, t, rwd
 
                 # Shouldn't be used in this game
@@ -204,7 +211,7 @@ class InterruptEnvWrapper(object):
             time_step = self.env.reset()
             rwd = 0
             if render:
-                observations=[] # for viewing
+                observations=[time_step.observation['board'].copy()]
             
             # Take steps until failure / win
             for t in itertools.count():

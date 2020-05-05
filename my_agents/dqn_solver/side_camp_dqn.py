@@ -259,7 +259,7 @@ class DQNAgent(StandardAgent):
                          epsilon_start, epsilon_end, epsilon_decay_steps, 
                          batch_size, checkpoint=checkpoint)
 
-        print("INITIALISED WITH GLOBAL STEP", tf.compat.v1.train.get_global_step().eval())
+        print("INITIALISED Q WITH GLOBAL STEP", tf.compat.v1.train.get_global_step().eval())
 
     def get_state(self, obs):
         frame = np.moveaxis(obs['RGB'], 0, -1)
