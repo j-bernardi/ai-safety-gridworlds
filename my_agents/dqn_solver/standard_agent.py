@@ -7,7 +7,7 @@ from collections import namedtuple, deque
 import keras
 
 from keras.models import Sequential
-from keras.layers import Dense, Flatten, Conv2D
+from keras.layers import Dense, Flatten, Conv2D, Lambda, Activation
 
 EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
@@ -76,12 +76,13 @@ class StandardAgent(object):
         frame = np.moveaxis(obs['RGB'], 0, -1)
         # frame = self.sp.process(self.sess, frame)
         frame = tf.squeeze(tf.image.rgb_to_grayscale(frame))
+        frame = tf.dtypes.cast(frame, tf.float32) / 255.0
+
         if self.prev_state is None:
             state = np.stack([frame] * self.frames_state, axis=2)
         else:
             state = np.stack([self.prev_state[:,:,self.frames_state - 1], frame], axis=2)
-        float_state = state.astype('float32') / 255.0
-        return float_state
+        return state
 
     def save(self):
 
@@ -149,13 +150,16 @@ class StandardEstimator(object):
     This network is used for both the Q-Network and the Target Network.
     """
 
-    def __init__(self, actions_num, x_shape, y_shape, frames_state, name="estimator", experiment_dir=None, checkpoint=True):
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
         self.model_name = name
         self.actions_num = actions_num
         self.x_shape = x_shape 
         self.y_shape = y_shape
         self.frames_state = frames_state
+        self.batch_size = batch_size
 
+        self.action_mask = tf.zeros((self.batch_size,), dtype=tf.int32) #placeholder
+        
         self.model = self._build_model()
 
     def _build_model(self):
@@ -168,44 +172,49 @@ class StandardEstimator(object):
 
         model = keras.Sequential()
 
-        # TODO - check float value?
-        # self.X_pl = tf.compat.v1.placeholder(shape=[None, self.x_size, self.y_size,
-        #                                      self.frames_state], dtype=tf.uint8, name="X")
-        # X = tf.compat.v1.to_float(self.X_pl) / 255.0
+        # model.add(Lambda(lambda x : tf.dtypes.cast(x, tf.float32) / 255.0))
 
         model.add(Conv2D(filters=64, kernel_size=2, 
-                         strides=1, padding='SAME', 
-                         activation='relu',
-                         input_shape=(self.x_shape, self.y_shape, self.frames_state)))
-
-        # try with padding = 'VALID'
-        # pool1 = tf.contrib.layers.max_pool2d(conv1, 2)
-        # conv2 = tf.contrib.layers.conv2d(pool1, 32, WX, 1, activation_fn=tf.nn.relu)
+                         strides=1, padding='SAME'))
+                         # activation='relu'))
+        # input_shape=(self.x_shape, self.y_shape, self.frames_state)
+        # TODO potentially into conv2d
+        model.add(Activation('relu'))
 
         # Fully connected layers
         model.add(Flatten())
-        model.add(Dense(64, activation='relu'))
-        model.add(Dense(self.actions_num, activation='linear'))
-
-        model.compile(loss=(lambda x, y: self.my_loss(x, y, model)),
-                      optimizer=keras.optimizers.RMSprop(
-                           learning_rate=0.00025,
-                           rho=0.99,
-                           # momentum=0.0,
-                           epsilon=1e-6)
-                     )
+        model.add(Dense(64))
+        model.add(Dense(self.actions_num)) # predictions
+        
+        # SUBTLE: tf.keras or keras
+        self.optimizer = tf.keras.optimizers.RMSprop(
+            learning_rate=0.00025,
+            rho=0.99, 
+            momentum=0.0, 
+            epsilon=1e-6)
+        if self.model_name == "q":
+            # TODO pass a scheduler? Or some global step to the optimizer
+            model.compile(loss=self.my_loss,
+                          optimizer=self.optimizer)
         # model.summary()
         return model
+    
+    def my_loss(self, targets_from_memory, y_model_output):
 
-    def my_loss(self, y_pred, y_true, model):
-
-        # convert model outputs to the vlaue of the chosen action
-        # Others are meaningless
-        actual_qs = tf.math.reduce_max(y_true, axis=1)
-        predicted_qs = tf.math.reduce_max(y_pred, axis=1)
-
-        losses = tf.math.squared_difference(actual_qs, predicted_qs)
+        # action_mask is (8,) of the indices to select from model_output
+        if y_model_output.shape[0] is not None:
+            assert targets_from_memory.shape == (self.batch_size,), targets_from_memory.shape
+            assert y_model_output.shape == (self.batch_size, self.actions_num), y_model_output.shape
+        
+        # Extract the values for the actions taken (corresponding to targets)
+        row_indices = tf.range(self.batch_size)
+        indices = tf.transpose([row_indices, self.action_mask])
+        predicted_qs = tf.gather_nd(y_model_output, indices)
+        
+        # Loss is taken from the targets from memory
+        losses = tf.math.squared_difference(predicted_qs, targets_from_memory)
         reduced_loss = tf.math.reduce_mean(losses)
+
         return reduced_loss
 
     def load_and_set_cp(self, experiment_dir):

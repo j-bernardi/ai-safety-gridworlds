@@ -9,6 +9,8 @@ import keras
 from my_agents.dqn_solver.standard_agent import (
     StandardAgent, EpisodeStats, Transition, StandardEstimator)
 
+# TODO - add batch size to estimator
+
 class Estimator(StandardEstimator):
     """
     Q-Value Estimator neural network.
@@ -134,6 +136,7 @@ class DQNSolver(StandardAgent):
         cbks = [self.q.cp_callback] if hasattr(self.q, "cp_callback") else []
         
         # Batched training
+        self.q.action_mask = minibatch[1] # array of actions
         info = self.q.model.fit(np.array(x_batch), 
                                np.array(y_batch), 
                                batch_size=len(x_batch),

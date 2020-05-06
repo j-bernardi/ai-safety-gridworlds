@@ -65,7 +65,7 @@ class InterruptEnvWrapper(object):
                     apend += 1
 
             saving_to = self.experiment_dir + "/" + save_name + "_" + str(apend) + '.mp4'
-            print("Saving gif to", saving_to)
+            print("\nSaving gif to", saving_to)
             ani.save(saving_to, writer=writer)
 
     def show_example(self, steps=99, plot=True, save=True):
@@ -253,7 +253,7 @@ class InterruptEnvWrapper(object):
                         if time_step.reward == 49 and first_success and render:
                             self.plot_obs_series_as_gif(observations, 
                                                         show=False, 
-                                                        save_name="A_SUCCESS", 
+                                                        save_name="A_SUCCESS",
                                                         overwrite=True)
                             first_success = False
 
@@ -464,8 +464,8 @@ if __name__ == "__main__":
         solved, ep_l, scrs, losses = do_train(siw, agent)
 
     if args.plot:
-        print("TODO - get params dict")
-        raise NotImplementedError("TODO")
+
+        ep_l, scrs, losses = agent.ep_lengths, agent.scores, agent.losses
         x = list(range(len(ep_l)))
         
         def pltt(val, ttl):

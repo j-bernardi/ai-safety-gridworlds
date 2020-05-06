@@ -120,13 +120,13 @@ class Estimator(StandardEstimator):
         self.predictions = tf.compat.v1.layers.dense(fc1, self.actions_num)
 
         # Get the predictions for the chosen actions only
-        # print("PREDICTIONS ALL", self.predictions.shape)
-        # Indices of the taken actions from the flattened predictions (e.g. an argmax per)
+        # print("PREDICTIONS ALL", self.predictions.shape) - MINE
+        # Indices of the taken actions from the flattened predictions (e.g. an argmax per) - MINE
         gather_indices = tf.range(batch_size) * tf.shape(self.predictions)[1] + self.actions_pl
         self.action_predictions = tf.gather(tf.reshape(self.predictions, [-1]), gather_indices)
         # print("ACTION PREDICTIONS", self.action_predictions.shape)
 
-        # Calcualte the loss
+        # Calcualte the loss between q values and the values of the max actions predicted
         self.losses = tf.compat.v1.squared_difference(self.y_pl, self.action_predictions)
         self.loss = tf.compat.v1.reduce_mean(self.losses)
 
@@ -273,7 +273,9 @@ class DQNAgent(StandardAgent):
     def act(self, obs, eps=None):
         if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
+        #print("OBS\n", obs)
         state = self.get_state(obs)
+        #print("TO STATE\n", state)
         probs = self.policy(self.sess, state, eps)  # you want some very random experience to populate the replay memory
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
@@ -294,6 +296,7 @@ class DQNAgent(StandardAgent):
         sample = [self.replay_memory[i] for i in sample]
 
         sts, a, r, n_sts, d = tuple(map(np.array, zip(*sample)))
+
         qs = self.target_q.predict(self.sess, n_sts).max(axis=1)
         qs[d] = 0
         targets = r + self.discount_factor * qs
