@@ -4,13 +4,99 @@ import pprint
 import numpy as np
 import tensorflow as tf
 from collections import namedtuple, deque
-import keras
 
-from keras.models import Sequential
-from keras.layers import Dense, Flatten, Conv2D, Lambda, Activation
+# import keras
+# from keras.models import Sequential
+
+from tensorflow.keras.layers import Dense, Flatten, Conv2D # , Lambda, Activation
 
 EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
+
+
+class StandardEstimator(object):
+    """
+    Q-Value Estimator neural network.
+    This network is used for both the Q-Network and the Target Network.
+    """
+
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
+        self.model_name = name
+        self.actions_num = actions_num
+        self.x_shape = x_shape 
+        self.y_shape = y_shape
+        self.frames_state = frames_state
+        self.batch_size = batch_size
+        self.checkpoint = checkpoint
+
+        # self.action_mask = tf.zeros((self.batch_size,), dtype=tf.int32) #placeholder
+        
+        self.model = self._build_model()
+
+        self.optimizer = tf.keras.optimizers.RMSprop(
+            learning_rate=0.00025,
+            rho=0.99, 
+            momentum=0.0, 
+            epsilon=1e-6)
+
+    def _build_model(self):
+        """
+        Builds the Tensorflow graph.
+        Takes states to predicted action's value
+        """
+
+        print("BUILDING MODEL", self.model_name)
+
+        model = tf.keras.Sequential()
+
+        # model.add(Lambda(lambda x : tf.dtypes.cast(x, tf.float32) / 255.0))
+
+        model.add(Conv2D(filters=64, kernel_size=2, 
+                         strides=1, padding='SAME',
+                         input_shape=(self.x_shape, 
+                                      self.y_shape,
+                                      self.frames_state),
+                         data_format="channels_last",
+                         activation='relu'))
+
+        # Fully connected layers
+        model.add(Flatten())
+        model.add(Dense(64, activation='linear'))
+        assert self.actions_num == 4
+        model.add(Dense(self.actions_num, activation='linear')) # predictions
+
+        return model
+    
+    @tf.function
+    def squared_diff_loss_at_a(self, states, targets_from_memory, action_mask, batch_size):
+
+        # Loss is taken from the targets from memory # NEW for double (8,4)
+        with tf.GradientTape() as tape:
+            q_predictions = self.model(states)
+            
+            tmp = tf.range(batch_size) * tf.shape(q_predictions)[1]
+            # print("dtypes", tmp.dtype, action_mask.dtype)
+            gather_indices = tmp + action_mask
+            q_predictions_at_a = tf.gather(tf.reshape(q_predictions, [-1]), gather_indices)
+
+            losses = tf.math.squared_difference(q_predictions_at_a, targets_from_memory) # changed targets to prediced 
+            reduced_loss = tf.math.reduce_mean(losses)
+
+        return reduced_loss, tape.gradient(reduced_loss, self.model.trainable_variables)
+
+    def load_and_set_cp(self, experiment_dir):
+        
+        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
+        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
+        if not latest:
+            if os.path.exists(self.checkpoint_path):
+                latest = self.checkpoint_path
+        if latest:
+            print("Loading model checkpoint {}...".format(latest))
+            self.model.load_weights(latest)
+        else:
+            print("Initializing model from scratch")
+
 
 
 class StandardAgent(object):
@@ -69,7 +155,6 @@ class StandardAgent(object):
                 state = next_state
 
     def new_episode(self):
-        self.loss = None
         self.prev_state = None
 
     def get_state(self, obs):
@@ -111,7 +196,7 @@ class StandardAgent(object):
 
         with open(self.dict_loc, 'rb') as df:
             loaded_dict = pickle.load(df)
-        
+
         # Restore the q net
         self.load_q_net_weights(loaded_dict)
         
@@ -141,91 +226,3 @@ class StandardAgent(object):
 
         else:
             print("No params saved yet!")
-
-
-
-class StandardEstimator(object):
-    """
-    Q-Value Estimator neural network.
-    This network is used for both the Q-Network and the Target Network.
-    """
-
-    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
-        self.model_name = name
-        self.actions_num = actions_num
-        self.x_shape = x_shape 
-        self.y_shape = y_shape
-        self.frames_state = frames_state
-        self.batch_size = batch_size
-
-        self.action_mask = tf.zeros((self.batch_size,), dtype=tf.int32) #placeholder
-        
-        self.model = self._build_model()
-
-    def _build_model(self):
-        """
-        Builds the Tensorflow graph.
-        Takes states to predicted action's value
-        """
-
-        print("BUILDING MODEL", self.model_name)
-
-        model = keras.Sequential()
-
-        # model.add(Lambda(lambda x : tf.dtypes.cast(x, tf.float32) / 255.0))
-
-        model.add(Conv2D(filters=64, kernel_size=2, 
-                         strides=1, padding='SAME'))
-                         # activation='relu'))
-        # input_shape=(self.x_shape, self.y_shape, self.frames_state)
-        # TODO potentially into conv2d
-        model.add(Activation('relu'))
-
-        # Fully connected layers
-        model.add(Flatten())
-        model.add(Dense(64))
-        model.add(Dense(self.actions_num)) # predictions
-        
-        # SUBTLE: tf.keras or keras
-        self.optimizer = tf.keras.optimizers.RMSprop(
-            learning_rate=0.00025,
-            rho=0.99, 
-            momentum=0.0, 
-            epsilon=1e-6)
-        if self.model_name == "q":
-            # TODO pass a scheduler? Or some global step to the optimizer
-            model.compile(loss=self.my_loss,
-                          optimizer=self.optimizer)
-        # model.summary()
-        return model
-    
-    def my_loss(self, targets_from_memory, y_model_output):
-
-        # action_mask is (8,) of the indices to select from model_output
-        if y_model_output.shape[0] is not None:
-            assert targets_from_memory.shape == (self.batch_size,), targets_from_memory.shape
-            assert y_model_output.shape == (self.batch_size, self.actions_num), y_model_output.shape
-        
-        # Extract the values for the actions taken (corresponding to targets)
-        row_indices = tf.range(self.batch_size)
-        indices = tf.transpose([row_indices, self.action_mask])
-        predicted_qs = tf.gather_nd(y_model_output, indices)
-        
-        # Loss is taken from the targets from memory
-        losses = tf.math.squared_difference(predicted_qs, targets_from_memory)
-        reduced_loss = tf.math.reduce_mean(losses)
-
-        return reduced_loss
-
-    def load_and_set_cp(self, experiment_dir):
-        
-        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
-        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
-        if not latest:
-            if os.path.exists(self.checkpoint_path):
-                latest = self.checkpoint_path
-        if latest:
-            print("Loading model checkpoint {}...".format(latest))
-            self.model.load_weights(latest)
-        else:
-            print("Initializing model from scratch")

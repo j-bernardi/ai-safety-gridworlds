@@ -15,22 +15,6 @@ import datetime
 from my_agents.dqn_solver.standard_agent import (
     StandardAgent, EpisodeStats, Transition, StandardEstimator)
 
-
-# class CustomSaveCallback(tf.keras.callbacks.Callback):
-#     
-#     def __init__(self, filepath, sess, saver, verbose=0):
-# 
-#         self.filepath = filepath
-#         self.verbose = verbose
-#         self.saver = saver
-#         self.sess = sess
-# 
-#     def on_train_batch_end(self, step, logs=None):
-#         if verbose > 0:
-#             print("Saving model to", self.filepath)
-#         self.saver.save(self.sess, self.filepath, global_step=step)
-
-
 # %% StateProcessor
 class StateProcessor():
     """
@@ -83,8 +67,6 @@ class Estimator(StandardEstimator):
 
     def _build_model(self):
         # Builds the Tensorflow graph.
-        
-
         print("\nBUILDING MODEL", self.model_name)
 
         # Placeholders for our input
@@ -120,11 +102,8 @@ class Estimator(StandardEstimator):
         self.predictions = tf.compat.v1.layers.dense(fc1, self.actions_num)
 
         # Get the predictions for the chosen actions only
-        # print("PREDICTIONS ALL", self.predictions.shape) - MINE
-        # Indices of the taken actions from the flattened predictions (e.g. an argmax per) - MINE
         gather_indices = tf.range(batch_size) * tf.shape(self.predictions)[1] + self.actions_pl
         self.action_predictions = tf.gather(tf.reshape(self.predictions, [-1]), gather_indices)
-        # print("ACTION PREDICTIONS", self.action_predictions.shape)
 
         # Calcualte the loss between q values and the values of the max actions predicted
         self.losses = tf.compat.v1.squared_difference(self.y_pl, self.action_predictions)
@@ -232,6 +211,7 @@ class DQNAgent(StandardAgent):
                            name="q",
                            experiment_dir=experiment_dir,
                            checkpoint=checkpoint)
+        #self.q.summary()
 
         # self.q.global_step = tf.compat.v1.train.create_global_step() #tf.compat.v1.Variable(0, trainable=False, dtype=tf.uint8)
         
@@ -243,7 +223,8 @@ class DQNAgent(StandardAgent):
                                   name="target_q",
                                   experiment_dir=experiment_dir,
                                   checkpoint=False)
-        
+        #self.target_q.model.summary()
+
         self.sp = StateProcessor(world_shape[0], world_shape[1])
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
 
@@ -273,9 +254,7 @@ class DQNAgent(StandardAgent):
     def act(self, obs, eps=None):
         if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
-        #print("OBS\n", obs)
         state = self.get_state(obs)
-        #print("TO STATE\n", state)
         probs = self.policy(self.sess, state, eps)  # you want some very random experience to populate the replay memory
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)

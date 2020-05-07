@@ -32,14 +32,18 @@ class Estimator(StandardEstimator):
                                         name,
                                         experiment_dir, 
                                         checkpoint)
+        # print("MODEL NAME", self.model_name)
+        # print(self.model.summary())
+        
         # Load a previous checkpoint if we find one
         if experiment_dir and checkpoint:
             self.checkpoint_dir = os.path.join(experiment_dir, self.model_name + "_checkpoints")
             self.checkpoint_path = os.path.join(self.checkpoint_dir, "latest.ckpt")
+            print("Setting checkpoint path", self.checkpoint_path)
             if not os.path.exists(self.checkpoint_dir):
                 os.makedirs(self.checkpoint_dir)
 
-            self.load_and_set_cp(experiment_dir)
+            # self.load_and_set_cp(experiment_dir)
             # TODO - customise so that an additional .txt file or something dumps global_state
             self.cp_callback = keras.callbacks.ModelCheckpoint(filepath=self.checkpoint_path,
                                                                save_weights_only=True,
@@ -86,6 +90,7 @@ class DQNAgent(StandardAgent):
                            name="q",
                            checkpoint=checkpoint,
                            experiment_dir=experiment_dir)
+        self.q.model.summary()
 
         # Estimator for the target Q value - don't ckpt as gets cloned 
         # CONSIDER REPLACE
@@ -98,6 +103,8 @@ class DQNAgent(StandardAgent):
                                   name="target_q",
                                   checkpoint=False,
                                   experiment_dir=experiment_dir)
+        self.target_q.model.summary()
+        
         # TODO - what is it?
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
 
@@ -112,9 +119,7 @@ class DQNAgent(StandardAgent):
     def act(self, obs, eps=None):
         if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
-        #print("OBS\n", obs)
         state = self.get_state(obs)
-        #print("TO STATE\n", state)
         probs = self.policy(state, eps)  # you want some very random experience to populate the replay memory
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
@@ -123,10 +128,7 @@ class DQNAgent(StandardAgent):
 
         # Clone the q network to the target q periodically
         if self.total_t % self.update_target_estimator_every == 0:
-            self.target_q.model = keras.models.clone_model(self.q.model)
-            # DUHHH cloning doesn't set weights. Sigh
             self.target_q.model.set_weights(self.q.model.get_weights())
-            # self.target_q.ckpt.step.assign(self.q.ckpt.step)
 
         # Process the current timestep
         next_state = self.get_state(time_step.observation)
@@ -135,54 +137,31 @@ class DQNAgent(StandardAgent):
                                              time_step.reward, next_state, done))
 
         # Take a sample from the replay memory
-        #sample_size = min(len(self.replay_memory),  
-        #                  self.batch_size)
-        #minibatch = random.sample(self.replay_memory, 
-        #                          sample_size)
-
         sample = np.random.choice(len(self.replay_memory), self.batch_size)
         sample = [self.replay_memory[i] for i in sample]
 
+        # The sample
         sts, a, r, n_sts, d = tuple(map(np.array, zip(*sample)))
-        
-        # We'll be fitting to this value
-        # qs_targets_from_state = self.target_q.model.predict(sts)
-        
-        # Update the action taken value to what was actually achieved plus prediction
-        qs_temp = self.target_q.model.predict(n_sts)
-        qs_predicted_on_next = qs_temp.max(axis=1)
-        assert d.shape == qs_predicted_on_next.shape
-        qs_predicted_on_next[d] = 0
-        
-        # Predict the future value of the action from Q' and update Q with it, then fit 
-        targets = r + self.discount_factor * qs_predicted_on_next
-        # print("TARGETS", targets.shape)
-        # qs_targets_from_state[:,a] = r + self.discount_factor * qs_predicted_on_next
 
-        cbks = [self.q.cp_callback] if hasattr(self.q, "cp_callback") else []
+        target_qs = tf.reduce_max(self.target_q.model.predict(n_sts), axis=1).numpy()
+        target_qs[d] = 0
 
-        # Batched training - minimise predicted Q from sts and qs_targets_from_state
-        # actually want to just take qs_targets_from_state[:, a] and minimise with Q'(sts)[a] # NOT a'
-        self.q.action_mask = a
-        # print("Action mask", self.q.action_mask)
-        #print("\nMODEL OUT", qs_temp.shape)
-        #print("ACTION MASK", self.q.action_mask.shape)
-        #print("TARGETS", targets.shape)
-        #sys.exit()
-        # print("\nITERATIONS", self.q.optimizer.iterations) - have checked, increments fine
+        q_targets = r + self.discount_factor * target_qs
 
-        info = self.q.model.fit(sts,
-                                targets, 
-                                batch_size=self.batch_size,
-                                verbose=0, 
-                                epochs=1,
-                                callbacks=cbks)
+        loss_value, grads = self.q.squared_diff_loss_at_a(sts, q_targets.astype('float32'), a.astype('int32'), self.batch_size)
+
+        self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
+        
+        # SAVE
+        if self.q.checkpoint:
+            self.q.model.save_weights(self.q.checkpoint_path)
 
         self.total_t += 1
         if time_step.last():
             self.new_episode()
 
-        return info.history['loss'][0]
+
+        return loss_value
 
     def load_q_net_weights(self, loaded_dict):
         self.q.load_and_set_cp(loaded_dict["experiment_dir"])

@@ -176,7 +176,7 @@ class InterruptEnvWrapper(object):
                     print("Type", type(termination))
                     print("Says", termination)
 
-    def check_solved_on_done(self, scores, average_over, target, verbose=False):
+    def check_solved_on_done(self, scores, average_over=100, target=36., verbose=False):
         # TODO - check that the running average of 
         # last 50 episodes completed ( >0 reward? or >= 
         # 42 (max possible if not interrupted))
@@ -390,7 +390,6 @@ def make_side_camp_double_dqn_agent(siw, exp_dir, checkpoint, sess):
                            )
     return original_agent
 
-
 def do_train(siw, agent):
 
     print("SOLVING")
@@ -425,11 +424,12 @@ if __name__ == "__main__":
     parser.add_argument("--train", dest="train", 
                         type=int, default=0, 
                         help="number of episodes to train")
+    
     parser.add_argument("--show", action="store_true")
-    # parser.add_argument("--view", action="store_true")
     parser.add_argument("--example", action="store_true")
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--model", type=str, default="default")
+
     args = parser.parse_args()
 
     exp_dir = args.model + "_" + args.model_suffix
@@ -481,7 +481,9 @@ if __name__ == "__main__":
             plt.savefig(exp_dir + "/" + new_graph)
 
         pltt(ep_l, "lengths")
-        pltt(scrs, "scores")
+        scrs2 = list(reversed([siw.check_solved_on_done(scrs[:(-i+len(scrs))], target=100)[1] 
+                               for i in range(len(scrs))]))
+        pltt(scrs2, "scores")
         pltt(losses, "losses")
 
     if args.show and args.model != "side_camp_dqn":
