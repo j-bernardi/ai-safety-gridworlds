@@ -146,7 +146,7 @@ class StandardAgent(object):
 
             assert state is not None
             assert next_state is not None
-            self.replay_memory.append(Transition(state, action, time_step.reward, next_state, done))
+            self.replay_memory.append(Transition(state, np.int32(action), np.float32(time_step.reward), next_state, done))
             if done:
                 time_step = env.reset()
                 self.new_episode()

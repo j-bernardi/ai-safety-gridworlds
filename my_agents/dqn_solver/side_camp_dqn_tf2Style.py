@@ -124,6 +124,20 @@ class DQNAgent(StandardAgent):
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
 
+    @tf.function
+    def take_step(self, sts, a, r, n_sts, d):
+
+        target_qs = tf.reduce_max(self.target_q.model(n_sts), axis=1)
+        target_qs_amend = tf.where(d, 0., target_qs)
+
+        q_targets = r + self.discount_factor * target_qs_amend
+
+        loss_value, grads = self.q.squared_diff_loss_at_a(sts, q_targets, a, self.batch_size)
+
+        self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
+
+        return loss_value
+
     def learn(self, time_step, action):
 
         # Clone the q network to the target q periodically
@@ -133,28 +147,15 @@ class DQNAgent(StandardAgent):
         # Process the current timestep
         next_state = self.get_state(time_step.observation)
         done = time_step.last()
-        self.replay_memory.append(Transition(self.prev_state, action,
-                                             time_step.reward, next_state, done))
+        self.replay_memory.append(Transition(self.prev_state, np.int32(action),
+                                             np.float32(time_step.reward), next_state, done))
 
         # Take a sample from the replay memory
         sample = np.random.choice(len(self.replay_memory), self.batch_size)
         sample = [self.replay_memory[i] for i in sample]
 
-        # The sample
-        sts, a, r, n_sts, d = tuple(map(np.array, zip(*sample)))
-
-        target_qs = tf.reduce_max(self.target_q.model.predict(n_sts), axis=1).numpy()
-        target_qs[d] = 0
-
-        q_targets = r + self.discount_factor * target_qs
-
-        loss_value, grads = self.q.squared_diff_loss_at_a(sts, q_targets.astype('float32'), a.astype('int32'), self.batch_size)
-
-        self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
-        
-        # SAVE
-        if self.q.checkpoint:
-            self.q.model.save_weights(self.q.checkpoint_path)
+        # Tuck into a fast tf function :-)
+        loss_value = self.take_step(*tuple(map(np.array, zip(*sample))))
 
         self.total_t += 1
         if time_step.last():

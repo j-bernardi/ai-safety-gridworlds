@@ -276,6 +276,9 @@ class InterruptEnvWrapper(object):
 
                     done = True
                     break
+            # SAVE
+            if agent.q.checkpoint:
+                agent.q.model.save_weights(agent.q.checkpoint_path)
 
             # Calculate a custom score for this episode
             agent.ep_lengths.append(t)
