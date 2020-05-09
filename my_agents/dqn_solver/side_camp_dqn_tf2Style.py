@@ -14,43 +14,10 @@ from collections import deque, namedtuple
 import keras
 
 from my_agents.dqn_solver.standard_agent import (
-    StandardAgent, EpisodeStats, Transition, StandardEstimator)
+    StandardAgent, EpisodeStats, Transition)
 
-
-# %% Estimator
-class Estimator(StandardEstimator):
-    """
-    Q-Value Estimator neural network.
-    This network is used for both the Q-Network and the Target Network.
-    """
-
-    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
-        super(Estimator, self).__init__(actions_num, 
-                                        x_shape, y_shape, 
-                                        frames_state,
-                                        batch_size,
-                                        name,
-                                        experiment_dir, 
-                                        checkpoint)
-        # print("MODEL NAME", self.model_name)
-        # print(self.model.summary())
-        
-        # Load a previous checkpoint if we find one
-        if experiment_dir and checkpoint:
-            self.checkpoint_dir = os.path.join(experiment_dir, self.model_name + "_checkpoints")
-            self.checkpoint_path = os.path.join(self.checkpoint_dir, "latest.ckpt")
-            print("Setting checkpoint path", self.checkpoint_path)
-            if not os.path.exists(self.checkpoint_dir):
-                os.makedirs(self.checkpoint_dir)
-
-            # self.load_and_set_cp(experiment_dir)
-            # TODO - customise so that an additional .txt file or something dumps global_state
-            self.cp_callback = keras.callbacks.ModelCheckpoint(filepath=self.checkpoint_path,
-                                                               save_weights_only=True,
-                                                               verbose=0,
-                                                               period=1)
-        else:
-            self.cp_callback = None
+from my_agents.dqn_solver.standard_agent import (
+    StandardEstimator as Estimator)
 
 
 def make_epsilon_greedy_policy(estimator, nA):
@@ -94,7 +61,6 @@ class DQNAgent(StandardAgent):
 
         # Estimator for the target Q value - don't ckpt as gets cloned 
         # CONSIDER REPLACE
-        # self.target_q.model = keras.models.clone_model(self.q.model)
         self.target_q = Estimator(actions_num, 
                                   x_shape=world_shape[0], 
                                   y_shape=world_shape[1], 
@@ -103,6 +69,8 @@ class DQNAgent(StandardAgent):
                                   name="target_q",
                                   checkpoint=False,
                                   experiment_dir=experiment_dir)
+        # self.target_q.model = tf.keras.models.clone_model(self.q.model)
+        self.target_q.model.set_weights(self.q.model.get_weights())
         self.target_q.model.summary()
         
         # TODO - what is it?
@@ -124,22 +92,7 @@ class DQNAgent(StandardAgent):
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
 
-    @tf.function
-    def take_step(self, sts, a, r, n_sts, d):
-
-        target_qs = tf.reduce_max(self.target_q.model(n_sts), axis=1)
-        target_qs_amend = tf.where(d, 0., target_qs)
-
-        q_targets = r + self.discount_factor * target_qs_amend
-
-        loss_value, grads = self.q.squared_diff_loss_at_a(sts, q_targets, a, self.batch_size)
-
-        self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
-
-        return loss_value
-
     def learn(self, time_step, action):
-
         # Clone the q network to the target q periodically
         if self.total_t % self.update_target_estimator_every == 0:
             self.target_q.model.set_weights(self.q.model.get_weights())
@@ -164,5 +117,46 @@ class DQNAgent(StandardAgent):
 
         return loss_value
 
-    def load_q_net_weights(self, loaded_dict):
-        self.q.load_and_set_cp(loaded_dict["experiment_dir"])
+    @tf.function
+    def take_step(self, sts, a, r, n_sts, d):
+
+        target_qs = tf.reduce_max(self.target_q.model(n_sts), axis=1)
+        target_qs_amend = tf.where(d, 0., target_qs)
+
+        q_targets = r + self.discount_factor * target_qs_amend
+
+        loss_value, grads = self.q.squared_diff_loss_at_a(sts, q_targets, a, self.batch_size)
+
+        self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
+
+        return loss_value
+
+    def save(self):
+        if self.checkpoint_dir:
+            self.q.model.save_weights(self.checkpoint_path)
+        super(DQNAgent, self).save()
+
+    def load(self):
+
+        self.q.load_model_cp(self.checkpoint_path)
+
+        super(DQNAgent, self).load_dict()
+
+"""
+# %% Estimator
+class Estimator(StandardEstimator):
+    ""
+    Q-Value Estimator neural network.
+    This network is used for both the Q-Network and the Target Network.
+    ""
+
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
+        super(Estimator, self).__init__(actions_num, 
+                                        x_shape, y_shape, 
+                                        frames_state,
+                                        batch_size,
+                                        name,
+                                        experiment_dir, 
+                                        checkpoint)
+
+"""
