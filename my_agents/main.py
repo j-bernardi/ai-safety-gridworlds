@@ -32,6 +32,14 @@ matplotlib.use("Agg")
 plt.rcParams['animation.ffmpeg_path'] = '/usr/bin/ffmpeg' 
 
 
+class MyParser(argparse.ArgumentParser):
+    
+    def error(self, message):
+        sys.stderr.write('error: {}\n'.format(message))
+        self.print_help()
+        sys.exit(2)
+
+
 class InterruptEnvWrapper(object):
     
     def __init__(self, level=1, max_episodes=500, naive=True, experiment_dir=None):
@@ -276,14 +284,12 @@ class InterruptEnvWrapper(object):
 
                     done = True
                     break
-            # SAVE
-            if agent.q.checkpoint:
-                agent.q.model.save_weights(agent.q.checkpoint_path)
 
             # Calculate a custom score for this episode
             agent.ep_lengths.append(t)
             agent.scores.append(rwd)
             agent.losses.append(loss)
+            agent.save() # Each step
 
             solved, scr = self.check_solved_on_done(agent.scores, 100, 36., verbose=verbose)
 
@@ -302,7 +308,7 @@ class InterruptEnvWrapper(object):
                 elapsed = datetime.datetime.now() - start_time
                 print("\nSOLVED")
                 print("\nTIME ELAPSED", elapsed)
-                agent.save()
+                agent.save() # Save solved on!
                 return True, agent.ep_lengths, agent.scores, agent.losses
 
         elapsed = datetime.datetime.now() - start_time
@@ -312,16 +318,8 @@ class InterruptEnvWrapper(object):
         self.plot_obs_series_as_gif(observations, show=False, 
                                             save_name="NOT_SOLVED")
         print("\nNOT SOLVED")
-        agent.save()
+        agent.save() # save at the end
         return False, agent.ep_lengths, agent.scores, agent.losses
-
-
-class MyParser(argparse.ArgumentParser):
-    
-    def error(self, message):
-        sys.stderr.write('error: {}\n'.format(message))
-        self.print_help()
-        sys.exit(2)
 
 
 def make_my_dqn_agent(siw, exp_dir, checkpoint):
@@ -395,11 +393,9 @@ def make_side_camp_double_dqn_agent(siw, exp_dir, checkpoint, sess):
 
 def do_train(siw, agent):
 
-    print("SOLVING")
+    print("Starting training.")
 
-    # agent.load() loads on creation now
-
-    print("CURRENT EXP STATE")
+    print("Current experiment state:")
     agent.display_param_dict()
 
     solved, ep_l, scrs, losses = siw._solve(agent, verbose=True)
@@ -409,7 +405,6 @@ def do_train(siw, agent):
     return solved, ep_l, scrs, losses
 
 def do_show(siw, agent):
-    agent.load()
     agent.display_param_dict()
     print("SHOWING EXAMPLE")
     solved2, ep_l2, scrs2 = siw.run_current_agent(agent)
@@ -419,7 +414,7 @@ def do_show(siw, agent):
 if __name__ == "__main__":
 
     parser = MyParser()
-    parser.add_argument("--model-suffix", type=str, 
+    parser.add_argument("--outdir", type=str, required=True,
                         help="If supplied, model "
                         "checkpoints will be saved so "
                         "training can be restarted later",
@@ -435,7 +430,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    exp_dir = args.model + "_" + args.model_suffix
+    exp_dir = args.outdir
 
     siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir) # 500)
 
@@ -443,7 +438,7 @@ if __name__ == "__main__":
     print("Actions:", siw.env._valid_actions,(siw.env._valid_actions.maximum+1), "actions")
     print("Board size", siw.board_size)
 
-    checkpoint = True if args.model_suffix else False
+    checkpoint = True if args.outdir else False
 
     if args.example:
         siw.show_example()

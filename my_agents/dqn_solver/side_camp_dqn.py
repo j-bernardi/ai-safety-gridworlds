@@ -55,6 +55,7 @@ class Estimator(StandardEstimator):
         self.x_shape = x_shape 
         self.y_shape = y_shape
         self.frames_state = frames_state
+        self.checkpoint = checkpoint
     
         # Writes Tensorboard summaries to disk
         #self.global_step = tf.Variable(0, name=self.model_name + "_global_step", 
@@ -64,6 +65,10 @@ class Estimator(StandardEstimator):
         
         with tf.compat.v1.variable_scope(self.scope):
             self._build_model()
+
+        # Load a previous checkpoint if we find one (now done in agent init)
+        #if checkpoint:
+        #    self.load_model_cp(experiment_dir)
 
     def _build_model(self):
         # Builds the Tensorflow graph.
@@ -145,8 +150,20 @@ class Estimator(StandardEstimator):
 
         return loss
 
-    def load_and_set_cp(self):
-        raise NotImplementedError("Not used in this version")
+    """
+    def load_model_cp(self, checkpoint_path):
+
+        # Load a previous checkpoint if we find one
+
+        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
+        if os.path.exists(checkpoint_path):
+            print("Loading model checkpoint {}...\n".format(checkpoint_path))
+            self.saver.restore(self.sess, checkpoint_path)
+        else:
+            print("No chekpoint", checkpoint_path, "detected! "
+                  "Initializing model from scratch")
+
+    """
 
 
 # %% helper functions
@@ -197,12 +214,6 @@ class DQNAgent(StandardAgent):
     """
     def __init__(self, sess, world_shape, actions_num, env, frames_state=2, experiment_dir=None, replay_memory_size=1500, replay_memory_init_size=500, update_target_estimator_every=250, discount_factor=0.99, epsilon_start=1.0, epsilon_end=0.1, epsilon_decay_steps=50000, batch_size=32, checkpoint=False):
 
-        # self.replay_memory_size = replay_memory_size
-        self.update_target_estimator_every = update_target_estimator_every
-        # self.global_step_q = tf.Variable(0, name='global_step_q', trainable=False)
-        # self.global_step_target_q = tf.Variable(0, name='global_step_target_q', trainable=False)
-        
-
         # Estimator for Q value
         self.q = Estimator(actions_num, 
                            world_shape[0],
@@ -211,7 +222,6 @@ class DQNAgent(StandardAgent):
                            name="q",
                            experiment_dir=experiment_dir,
                            checkpoint=checkpoint)
-        #self.q.summary()
 
         # self.q.global_step = tf.compat.v1.train.create_global_step() #tf.compat.v1.Variable(0, trainable=False, dtype=tf.uint8)
         
@@ -223,7 +233,6 @@ class DQNAgent(StandardAgent):
                                   name="target_q",
                                   experiment_dir=experiment_dir,
                                   checkpoint=False)
-        #self.target_q.model.summary()
 
         self.sp = StateProcessor(world_shape[0], world_shape[1])
         self.policy = make_epsilon_greedy_policy(self.q, actions_num)
@@ -231,7 +240,9 @@ class DQNAgent(StandardAgent):
         self.sess = sess
         self.sess.run(tf.compat.v1.global_variables_initializer())
 
-        self.saver = tf.compat.v1.train.Saver()
+        if checkpoint:
+            self.saver = tf.compat.v1.train.Saver(sharded=False)
+
 
         super(DQNAgent, self).__init__(world_shape, actions_num, env, 
                          frames_state, experiment_dir, 
@@ -240,7 +251,8 @@ class DQNAgent(StandardAgent):
                          epsilon_start, epsilon_end, epsilon_decay_steps, 
                          batch_size, checkpoint=checkpoint)
 
-        print("INITIALISED Q WITH GLOBAL STEP", tf.compat.v1.train.get_global_step().eval())
+        print("Initialised double dqn with global step", 
+              tf.compat.v1.train.get_global_step().eval())
 
     def get_state(self, obs):
         frame = np.moveaxis(obs['RGB'], 0, -1)
@@ -287,24 +299,27 @@ class DQNAgent(StandardAgent):
 
         return loss
 
-    def save(self):
+    def load(self):
+
+        try:
+            self.saver.restore(self.sess, self.checkpoint_path)
+            print("Model loaded", self.checkpoint_path)
+        except ValueError as ve:
+            if "not a valid checkpoint" in str(ve):
+                print("No checkpoint found, init from scratch.")
+            else:
+                raise ve
+
+        super(DQNAgent, self).load_dict()
+
+    def save(self, solved=False):
+
+        # Save the session
+        if self.checkpoint_dir:
+            out_name = self.saver.save(self.sess, 
+                                       self.checkpoint_path) # , 
+                            # global_step=tf.compat.v1.train.get_global_step())
+            assert out_name == self.checkpoint_path
+        
         # Save the dict
         super(DQNAgent, self).save()
-        # Save the session
-        if self.experiment_dir:
-            self.saver.save(self.sess, self.checkpoint_path)
-    
-    def load_q_net_weights(self, loaded_dict):
-
-        # Load a previous checkpoint if we find one
-        
-        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
-        latest = tf.train.latest_checkpoint(self.checkpoint_dir)
-        if not latest:
-            if os.path.exists(self.checkpoint_path):
-                latest = self.checkpoint_path
-        
-        
-        if latest:
-            print("Loading model checkpoint {}...\n".format(latest))
-            self.saver.restore(self.sess, latest)
