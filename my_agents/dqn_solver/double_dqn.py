@@ -141,22 +141,3 @@ class DQNAgent(StandardAgent):
         self.q.load_model_cp(self.checkpoint_path)
 
         super(DQNAgent, self).load_dict()
-
-"""
-# %% Estimator
-class Estimator(StandardEstimator):
-    ""
-    Q-Value Estimator neural network.
-    This network is used for both the Q-Network and the Target Network.
-    ""
-
-    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
-        super(Estimator, self).__init__(actions_num, 
-                                        x_shape, y_shape, 
-                                        frames_state,
-                                        batch_size,
-                                        name,
-                                        experiment_dir, 
-                                        checkpoint)
-
-"""

@@ -8,7 +8,7 @@ from collections import namedtuple, deque
 # import keras
 # from keras.models import Sequential
 
-from tensorflow.keras.layers import Dense, Flatten, Conv2D # , Lambda, Activation
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, Activation # , Lambda, Activation
 
 EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards"])
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
@@ -77,7 +77,6 @@ class StandardAgent(object):
 
     def get_state(self, obs):
         frame = np.moveaxis(obs['RGB'], 0, -1)
-        # frame = self.sp.process(self.sess, frame)
         frame = tf.squeeze(tf.image.rgb_to_grayscale(frame))
         frame = tf.dtypes.cast(frame, tf.float32) / 255.0
 
@@ -158,8 +157,6 @@ class StandardEstimator(object):
         self.batch_size = batch_size
         self.checkpoint = checkpoint
 
-        # self.action_mask = tf.zeros((self.batch_size,), dtype=tf.int32) #placeholder
-        
         self.model = self._build_model()
 
         self.optimizer = tf.keras.optimizers.RMSprop(
@@ -185,13 +182,13 @@ class StandardEstimator(object):
                          input_shape=(self.x_shape, 
                                       self.y_shape,
                                       self.frames_state),
-                         data_format="channels_last",
-                         activation='relu'))
+                         data_format="channels_last"
+                         ))
+        model.add(Activation('relu'))
 
         # Fully connected layers
         model.add(Flatten())
         model.add(Dense(64, activation='linear'))
-        assert self.actions_num == 4
         model.add(Dense(self.actions_num, activation='linear')) # predictions
 
         return model

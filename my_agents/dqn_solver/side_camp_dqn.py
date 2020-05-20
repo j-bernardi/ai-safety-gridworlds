@@ -150,21 +150,6 @@ class Estimator(StandardEstimator):
 
         return loss
 
-    """
-    def load_model_cp(self, checkpoint_path):
-
-        # Load a previous checkpoint if we find one
-
-        # TODO - HAX because latest_checkpoint not working - maybe needs epoch?
-        if os.path.exists(checkpoint_path):
-            print("Loading model checkpoint {}...\n".format(checkpoint_path))
-            self.saver.restore(self.sess, checkpoint_path)
-        else:
-            print("No chekpoint", checkpoint_path, "detected! "
-                  "Initializing model from scratch")
-
-    """
-
 
 # %% helper functions
 def copy_model_parameters(sess, estimator1, estimator2):

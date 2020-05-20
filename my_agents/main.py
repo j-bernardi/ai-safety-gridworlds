@@ -324,8 +324,7 @@ class InterruptEnvWrapper(object):
 
 def make_my_dqn_agent(siw, exp_dir, checkpoint):
 
-    from my_agents.dqn_solver.my_dqn import (
-        DQNSolver)
+    from my_agents.dqn_solver.dqn import DQNSolver
 
     my_agent = DQNSolver(siw.board_size,
                          siw.env._valid_actions.maximum+1,
@@ -347,8 +346,7 @@ def make_my_dqn_agent(siw, exp_dir, checkpoint):
 
 def make_double_dqn_agent(siw, exp_dir, checkpoint):
 
-    from my_agents.dqn_solver.side_camp_dqn_tf2Style import (
-        DQNAgent)
+    from my_agents.dqn_solver.double_dqn import DQNAgent
     
     their_agent = DQNAgent(siw.board_size,
                            siw.env._valid_actions.maximum+1,

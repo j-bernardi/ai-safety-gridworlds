@@ -1,4 +1,25 @@
-# AI safety gridworlds
+# AI safety gridworlds fork
+
+Here I implement a range of agents in the DeepMind AI Safety Gridworlds environment.
+
+## My agents
+
+### side camp double dqn
+A double DQN agent implemented in TF1. This is inherited from the side camp fork of the same project,
+[here](https://github.com/side-grids/ai-safety-gridworlds/blob/master/side_grids_camp/agents/dqn.py)
+
+
+### Double DQN 
+I reimplement that algorithm in tf2
+
+This is a double DQN agent that copies the primary network parameters into a 
+target network every n steps, where n is a hyperparameter.
+
+### DQN
+A simple (single) dqn solver with experience replay
+
+
+# AI safety gridworlds - DeepMind Introduction
 
 This is a suite of reinforcement learning environments illustrating various
 safety properties of intelligent agents. These environments are
@@ -20,6 +41,12 @@ For the latest list of changes, see [CHANGES.md](https://github.com/deepmind/ai-
     `git clone https://github.com/deepmind/ai-safety-gridworlds.git`.
 4.  Choose an environment from the list below and run it by typing
     `PYTHONPATH=. python -B ai_safety_gridworlds/environments/ENVIRONMENT_NAME.py`.
+
+OR run an agent I have implemented
+
+`python my_agents/main.py -h` 
+
+For more information
 
 ## Dependencies
 
