@@ -273,10 +273,10 @@ class DQNAgent(StandardAgent):
 
         sts, a, r, n_sts, d = tuple(map(np.array, zip(*sample)))
 
-        qs = self.target_q.predict(self.sess, n_sts).max(axis=1)
-        qs[d] = 0
-        targets = r + self.discount_factor * qs
-        loss = self.q.update(self.sess, sts, a, targets)
+        future_q = self.target_q.predict(self.sess, n_sts).max(axis=1)
+        future_q[d] = 0
+        q_targets = r + self.discount_factor * future_q
+        loss = self.q.update(self.sess, sts, a, q_targets)
 
         self.total_t += 1
         if time_step.last():

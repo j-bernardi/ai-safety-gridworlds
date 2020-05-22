@@ -182,9 +182,10 @@ class StandardEstimator(object):
                          input_shape=(self.x_shape, 
                                       self.y_shape,
                                       self.frames_state),
-                         data_format="channels_last"
+                         data_format="channels_last",
+                         activation='relu'
                          ))
-        model.add(Activation('relu'))
+        # model.add(Activation('relu'))
 
         # Fully connected layers
         model.add(Flatten())
@@ -194,18 +195,16 @@ class StandardEstimator(object):
         return model
     
     @tf.function
-    def squared_diff_loss_at_a(self, states, targets_from_memory, action_mask, batch_size):
+    def squared_diff_loss_at_a(self, states, action_mask, targets_from_memory, batch_size):
 
         # Loss is taken from the targets from memory # NEW for double (8,4)
         with tf.GradientTape() as tape:
             q_predictions = self.model(states)
             
-            tmp = tf.range(batch_size) * tf.shape(q_predictions)[1]
-            # print("dtypes", tmp.dtype, action_mask.dtype)
-            gather_indices = tmp + action_mask
+            gather_indices = tf.range(batch_size) * tf.shape(q_predictions)[1] + action_mask
             q_predictions_at_a = tf.gather(tf.reshape(q_predictions, [-1]), gather_indices)
 
-            losses = tf.math.squared_difference(q_predictions_at_a, targets_from_memory) # changed targets to prediced 
+            losses = tf.math.squared_difference(q_predictions_at_a, targets_from_memory)
             reduced_loss = tf.math.reduce_mean(losses)
 
         return reduced_loss, tape.gradient(reduced_loss, self.model.trainable_variables)

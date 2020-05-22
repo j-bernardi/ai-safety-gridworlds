@@ -77,7 +77,7 @@ class DQNSolver(StandardAgent):
                          update_target_estimator_every, discount_factor, 
                          epsilon_start, epsilon_end, epsilon_decay_steps, 
                          batch_size, checkpoint)
-        
+
     def act(self, obs, eps=None):
         """Take a random action or the most valuable predicted
         action, based on the agent's model. 
@@ -100,7 +100,7 @@ class DQNSolver(StandardAgent):
             return random.randrange(self.actions_num)
         else:
             return np.argmax(self.q.model.predict(pass_state).flatten())
-    
+
     def learn(self, time_step, action):
         """Updated the agent's decision network based
         on a sample of previous decisions it has seen.
