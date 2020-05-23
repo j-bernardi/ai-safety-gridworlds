@@ -57,7 +57,7 @@ class StandardAgent(object):
         time_step = env.reset()
         state = self.get_state(time_step.observation)
         for i in range(replay_memory_init_size):
-            action = self.act(time_step.observation, eps=0.95)
+            action = self.act_random(time_step.observation, eps=0.95)
             time_step = env.step(action)
             next_state = self.get_state(time_step.observation)
             done = time_step.last()
@@ -86,7 +86,7 @@ class StandardAgent(object):
             state = np.stack([self.prev_state[:,:,self.frames_state - 1], frame], axis=2)
         return state
 
-    def save(self):
+    def save_param_dict(self):
         """Save params only!
         Model saving should be implemented by child class
         """
@@ -108,7 +108,7 @@ class StandardAgent(object):
         with open(self.dict_loc, 'wb') as df:
             pickle.dump(save_dict, df)
 
-    def load_dict(self):
+    def load_param_dict(self):
 
         if not os.path.exists(self.dict_loc):
             print("Nothing saved at ", self.dict_loc, "yet!")
@@ -148,14 +148,14 @@ class StandardEstimator(object):
     This network is used for both the Q-Network and the Target Network.
     """
 
-    def __init__(self, actions_num, x_shape, y_shape, frames_state, batch_size=32, name="estimator", experiment_dir=None, checkpoint=True):
+    def __init__(self, actions_num, x_shape, y_shape, frames_state, name="estimator"):
+        
         self.model_name = name
+        
         self.actions_num = actions_num
         self.x_shape = x_shape 
         self.y_shape = y_shape
         self.frames_state = frames_state
-        self.batch_size = batch_size
-        self.checkpoint = checkpoint
 
         self.model = self._build_model()
 
@@ -193,24 +193,24 @@ class StandardEstimator(object):
         model.add(Dense(self.actions_num, activation='linear')) # predictions
 
         return model
-    
-    @tf.function
-    def squared_diff_loss_at_a(self, states, action_mask, targets_from_memory, batch_size):
 
-        # Loss is taken from the targets from memory # NEW for double (8,4)
-        with tf.GradientTape() as tape:
-            q_predictions = self.model(states)
-            
-            gather_indices = tf.range(batch_size) * tf.shape(q_predictions)[1] + action_mask
-            q_predictions_at_a = tf.gather(tf.reshape(q_predictions, [-1]), gather_indices)
-
-            losses = tf.math.squared_difference(q_predictions_at_a, targets_from_memory)
-            reduced_loss = tf.math.reduce_mean(losses)
-
-        return reduced_loss, tape.gradient(reduced_loss, self.model.trainable_variables)
+    def save_model(self, checkpoint_path, verbose=False):
+        """
+        Simply saves the model to the checkpoint path
+        """
+        if verbose:
+            print("Saving model to", checkpoint_path, "...", end="")
+        
+        self.model.save_weights(checkpoint_path)
+        
+        if verbose:
+            print("Saved")
 
     def load_model_cp(self, checkpoint_path):
-        # Load a q net from the path presented
+        """
+        Load the estimator's model state.
+        If no checkpoint exists, initialise from scratch
+        """
 
         try:
             self.model.load_weights(checkpoint_path)

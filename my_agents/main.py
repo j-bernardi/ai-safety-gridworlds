@@ -219,7 +219,7 @@ class InterruptEnvWrapper(object):
             # Take steps until failure / win
             for t in itertools.count():
 
-                action = agent.act(time_step.observation)
+                action = agent.act_random(time_step.observation)
                 time_step = self.env.step(action)
                 loss = agent.learn(time_step, action)
 

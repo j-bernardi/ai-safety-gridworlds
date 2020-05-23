@@ -248,7 +248,7 @@ class DQNAgent(StandardAgent):
             state = np.stack([self.prev_state[:,:,self.frames_state - 1], frame], axis=2)
         return state
 
-    def act(self, obs, eps=None):
+    def act_random(self, obs, eps=None):
         if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
         state = self.get_state(obs)

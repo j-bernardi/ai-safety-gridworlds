@@ -20,25 +20,6 @@ from my_agents.dqn_solver.standard_agent import (
     StandardEstimator as Estimator)
 
 
-def make_epsilon_greedy_policy(nA):
-    """
-    Creates an epsilon-greedy policy based on a given Q-function approximator and epsilon.
-    Args:
-        estimator: An estimator that returns q values for a given state
-        nA: Number of actions in the environment.
-    Returns:
-        A function that takes the (model, observation, epsilon) as an argument and returns
-        the probabilities for each action in the form of a numpy array of length nA.
-    """
-    def policy_fn(estimator_model, observation, epsilon):
-        A = np.ones(nA, dtype=float) * epsilon / nA
-        q_values = estimator_model.predict(np.expand_dims(observation, 0))[0]
-        best_action = np.argmax(q_values)
-        A[best_action] += (1.0 - epsilon)
-        return A
-    return policy_fn
-
-
 # %% DQNAgent
 class DQNAgent(StandardAgent):
     """
@@ -53,10 +34,7 @@ class DQNAgent(StandardAgent):
                            x_shape=world_shape[0], 
                            y_shape=world_shape[1], 
                            frames_state=frames_state,
-                           batch_size=batch_size,
-                           name="q",
-                           checkpoint=checkpoint,
-                           experiment_dir=experiment_dir)
+                           name="q")
         self.q.model.summary()
 
         # Estimator for the target Q value - don't ckpt as gets cloned 
@@ -64,15 +42,10 @@ class DQNAgent(StandardAgent):
                                   x_shape=world_shape[0], 
                                   y_shape=world_shape[1], 
                                   frames_state=frames_state,
-                                  batch_size=batch_size,
                                   name="target_q",
-                                  checkpoint=False,
                                   )
 
-        # Returns a function that takes model, state and eps, returns policy
-        self.policy = make_epsilon_greedy_policy(actions_num)
-
-        # Now that network to save (q) has been defined, call super
+        # Call super - this automatically loads network state
         super(DQNAgent, self).__init__(world_shape, actions_num, env, 
                          frames_state, experiment_dir, 
                          replay_memory_size, replay_memory_init_size, 
@@ -80,72 +53,114 @@ class DQNAgent(StandardAgent):
                          epsilon_start, epsilon_end, epsilon_decay_steps, 
                          batch_size, checkpoint)
         
-        # Set target weights after loading in q network, here
-        # TODO - maybe override load() in the parent for this
-        # self.target_q.model = tf.keras.models.clone_model(self.q.model)
+        # Set target weights after loading in q network from super
+        self.target_q.model = tf.keras.models.clone_model(self.q.model)
         self.target_q.model.set_weights(self.q.model.get_weights())
         self.target_q.model.summary()
 
-    def act(self, obs, eps=None, train=True):
-        if eps is None and train:
+    def act_random(self, obs, eps=None):
+        """
+        Act with randomness
+        """
+        if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
-        elif not train:
-          eps = 0.
         state = self.get_state(obs)
-        # you want some very random experience to populate the replay memory
-        probs = self.policy(self.q.model, state, eps)  
+        probs = self.policy_fn(state, eps) # Probability over actions
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
+
+    def act_determine(self, obs, eps=None):
+        """
+        Act without randomness
+        """
+        state = self.get_state(obs)
+        self.prev_state = state
+        return np.argmax(self.q.model(state))
+
+    def policy_fn(self, observation, epsilon):
+        """
+        Creates an epsilon-greedy policy based on the Q-function approximator and epsilon.
+        Args:
+            observation: the current state observation
+            epsilon: the degree of randomness to apply
+        Returns:
+            A function that returns the probabilities for each possible agent action 
+            in the form of a numpy array.
+        """
+        A = np.ones(self.actions_num, dtype=float) * epsilon / self.actions_num
+        q_values = self.q.model(np.expand_dims(observation, 0))[0]
+        best_action = np.argmax(q_values)
+        A[best_action] += (1.0 - epsilon)
+        return A
 
     def learn(self, time_step, action):
         # Clone the q network to the target q periodically
         if self.total_t % self.update_target_estimator_every == 0:
             self.target_q.model.set_weights(self.q.model.get_weights())
-            assert all([np.all(a == b) for a, b in zip(self.target_q.model.get_weights(),
-                                                  self.q.model.get_weights())])
 
         # Process the current timestep
         next_state = self.get_state(time_step.observation)
         done = time_step.last()
-        self.replay_memory.append(Transition(self.prev_state, np.int32(action),
-                                             np.float32(time_step.reward), next_state, done))
+        sarnsd = Transition(self.prev_state, np.int32(action),
+                            np.float32(time_step.reward), 
+                            next_state, done)
+        self.replay_memory.append(sarnsd)
 
         # Take a sample from the replay memory
-        sample = np.random.choice(len(self.replay_memory), self.batch_size)
-        sample = [self.replay_memory[i] for i in sample]
+        sample_i = np.random.choice(len(self.replay_memory), self.batch_size)
+        sample = [self.replay_memory[i] for i in sample_i] # Avoid creating whole list
 
-        # Tuck into a fast tf function :-)
-        loss_value = self.take_step(*tuple(map(np.array, zip(*sample))))
+        # Update the Q network with this sample
+        loss_value = self.take_training_step(*tuple(map(np.array, zip(*sample))))
 
         self.total_t += 1
         if time_step.last():
             self.new_episode()
 
-        assert all([not np.all(a == b) for a, b in zip(self.target_q.model.get_weights(),
-                                                  self.q.model.get_weights())])
         return loss_value
 
     @tf.function
-    def take_step(self, sts, a, r, n_sts, d):
+    def take_training_step(self, sts, a, r, n_sts, d):
 
-        future_q = tf.reduce_max(self.target_q.model(n_sts), axis=1)
-        future_q = tf.where(d, 0., future_q)
+        future_max_q = tf.reduce_max(self.target_q.model(n_sts), axis=1)
+        q_target = tf.where(d, r, r + self.discount_factor * future_max_q)
 
-        q_targets = r + self.discount_factor * future_q
-
-        loss_value, grads = self.q.squared_diff_loss_at_a(sts, a, q_targets, self.batch_size)
+        loss_value, grads = self.squared_diff_loss_at_a(sts, a, q_target)
 
         self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
 
         return loss_value
 
+    @tf.function
+    def squared_diff_loss_at_a(self, states, action_mask, targets_from_memory):
+        """
+        A squared difference loss function 
+        Diffs the Q model's predicted values with 
+        the actual values plus the discounted next state by the target Q network
+        """
+        with tf.GradientTape() as tape:
+            q_predictions = self.q.model(states)
+            
+            gather_indices = tf.range(self.batch_size) * tf.shape(q_predictions)[1] + action_mask
+            q_predictions_at_a = tf.gather(tf.reshape(q_predictions, [-1]), gather_indices)
+
+            losses = tf.math.squared_difference(q_predictions_at_a, targets_from_memory)
+            reduced_loss = tf.math.reduce_mean(losses)
+
+        return reduced_loss, tape.gradient(reduced_loss, self.q.model.trainable_variables)
+
     def save(self):
+        # Save the Q model (Target Q is a copy)
         if self.checkpoint_dir:
-            self.q.model.save_weights(self.checkpoint_path)
-        super(DQNAgent, self).save()
+            self.q.save_model(self.checkpoint_dir)
+
+        # And save the param dict
+        super(DQNAgent, self).save_param_dict()
 
     def load(self):
 
+        # Load the Q model
         self.q.load_model_cp(self.checkpoint_path)
 
-        super(DQNAgent, self).load_dict()
+        # Load the experiment state
+        super(DQNAgent, self).load_param_dict()
