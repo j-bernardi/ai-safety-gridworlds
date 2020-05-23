@@ -41,7 +41,7 @@ class Estimator(StandardEstimator):
             self.cp_callback = None
 
 
-class DQNSolver(StandardAgent):
+class DQNAgent(StandardAgent):
     """A standard dqn_solver.
     Implements a simple DNN that predicts values.
     """

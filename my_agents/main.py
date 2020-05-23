@@ -1,35 +1,17 @@
 import os, sys, datetime, itertools, argparse
-import numpy as np
-
-from random import randrange
-
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-
-import tensorflow as tf
-
-from pycolab.rendering import (
-    BaseObservationRenderer,
-    Observation)
 
 import ai_safety_gridworlds
+
+import numpy as np
+import tensorflow as tf
+
+from random import randrange
+from my_agents.termination_handler import TerminationHandler
+from my_agents.plotting import (
+    PlotHandler)
+
 from ai_safety_gridworlds.environments.safe_interruptibility import (
-    SafeInterruptibilityEnvironment, 
-    InterruptionPolicyWrapperDrape, 
-    ButtonDrape, 
-    AgentSprite,
-    Actions,
-    GAME_ART)
-from ai_safety_gridworlds.environments.shared.safety_game import (
-    DEFAULT_ACTION_SET,
-    timestep_termination_reason)
-
-from ai_safety_gridworlds.environments.shared.termination_reason_enum import TerminationReason
-
-matplotlib.use("Agg")
-# Set your ffmpeg path
-plt.rcParams['animation.ffmpeg_path'] = '/usr/bin/ffmpeg' 
+    SafeInterruptibilityEnvironment)
 
 
 class MyParser(argparse.ArgumentParser):
@@ -43,38 +25,17 @@ class MyParser(argparse.ArgumentParser):
 class InterruptEnvWrapper(object):
     
     def __init__(self, level=1, max_episodes=500, experiment_dir=None):
-        self.env = SafeInterruptibilityEnvironment()
-        self.obs_spec = self.env._compute_observation_spec()
-        self.board_size = self.env._observation_spec['board'].shape
-
-        # self.renderer = BaseObservationRenderer(*self.obs_spec['board'].shape, tuple(self.env._value_mapping.keys()))
         self.level = level
+        
+        self.env = SafeInterruptibilityEnvironment(level=self.level)
+        self.board_size = self.env._observation_spec['board'].shape
 
         self.max_episodes = max_episodes
 
         self.experiment_dir = experiment_dir if experiment_dir else os.get_cwd()
 
-    def plot_obs_series_as_gif(self, observation_series, show=False, save_name=None, overwrite=False):
-        fig = plt.figure()
-        ims = []
-        # Set up formatting for the movie files
-        Writer = animation.writers['ffmpeg']
-        writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=1800)
-        for obs in observation_series:
-            ims.append([plt.imshow(obs, animated=True)])
-        ani = animation.ArtistAnimation(fig, ims, interval=50, repeat_delay=1000)
-
-        if save_name is not None:
-            
-            apend = 0
-
-            if not overwrite:
-                while save_name + "_" + str(apend) + '.mp4' in os.listdir(self.experiment_dir):
-                    apend += 1
-
-            saving_to = self.experiment_dir + "/" + save_name + "_" + str(apend) + '.mp4'
-            print("\nSaving gif to", saving_to)
-            ani.save(saving_to, writer=writer)
+        self.termination_handler = TerminationHandler(self.experiment_dir)
+        self.plot_handler = PlotHandler(self.experiment_dir)
 
     def show_example(self, steps=99, plot=True, save=True):
         """Show a quick view of the environemt, 
@@ -107,96 +68,50 @@ class InterruptEnvWrapper(object):
             time_step = self.env.step(randrange(self.env._valid_actions.maximum+1))
             obs = time_step.observation['board']
 
-            # print("Step type: first {}, mid {}, last {}".format(time_step.first(), time_step.mid(), time_step.last()))
-            # print("Reward {}, discount {}".format(time_step.reward, time_step.discount))
-            # print("Observation type: {}".format(type(time_step.observation)))
-
             observations.append(obs.copy())
 
-        if plot:
-            save_name = 'randGame' if save else None
-            self.plot_obs_series_as_gif(observations, show=True, save_name=save_name, overwrite=False)
+        if save:
+            save_name = 'randGame'
+            self.plot_handler.plot_obs_series_as_gif(
+                save_name, observations, overwrite=False)
 
         print("Obs")
         print(observations[-1])
 
         plt.show()
 
-    def run_current_agent(self, agent, steps=99, plot=True, save=True):
-        # TODO - use the current state of the agent to see what's going on
+    def run_current_agent(self, agent, render=True):
+        """
+        Runs a single episode with the agent running without randomness
+        Returns
+            Success - if reached goal
+            t - in how many steps
+            score_on_show - what the env reward was
+        """
         time_step = self.env.reset()
         rwd = 0
-        observations = [time_step.observation['board'].copy()]
+        if render:
+            observations = [time_step.observation['board'].copy()]
         for t in itertools.count():
 
-            # Find the action the agent thinks we should take
-
-            # TODO - try a non-random step here on evaluation?
-            action = agent.act(time_step.observation)
-
-            # Take the action, make observations
+            action = agent.act_determine(time_step.observation)
             time_step = self.env.step(action)
-            # loss = agent.learn(time_step, action)
 
-            # NEED observation, reward, done, info = self.env.step()
-            observation = time_step.observation['board'].copy()
-            observations.append(observation)
+            if render:
+                observation = time_step.observation['board'].copy()
+                observations.append(observation)
 
             print("\rStep {} ({}): {}".format(
-                      t, agent.total_t, + 1),
-                      end="")
+                  t, agent.total_t, + 1), end="")
             sys.stdout.flush()
             
             rwd += time_step.reward
 
             if time_step.last():
-
-                termination = timestep_termination_reason(time_step)
-                interrupted = False
-                
-                # Check if reached goal
-                if termination == TerminationReason.TERMINATED:
-                    # TODO - establish if hit interrupt button or success
-                    if time_step.reward > 0: 
-                        print(" - COMPLETED, step", t, "reward", rwd)
-                        print(time_step.observation['board'])
-                        self.plot_obs_series_as_gif(observations, show=False, 
-                                                overwrite=False,
-                                                save_name="SUCCEEDED_ON_SHOW")
-                        return True, t, rwd
-                    else:
-                        assert t == 99 and reward == 49.
-
-                # Check if maxed on episodes
-                elif termination == TerminationReason.MAX_STEPS:
-                    print(" - MAXED OUT ON TIME STEP", t, "reward", rwd)
-                    print(time_step.observation['board'])
-                    # Failed - maxxed on episodes
-                    self.plot_obs_series_as_gif(observations, show=False, 
-                                                overwrite=False,
-                                                save_name="FAILED_ON_SHOW")
-                    return False, t, rwd
-
-                # Shouldn't be used in this game
-                elif termination == TerminationReason.INTERRUPTED:
-                    raise NotImplementedError("interrupted termination not implemented.")
-
-                else:
-                    print("FAILED TO DETECT TERMINATION TYPE")
-                    print("Type", type(termination))
-                    print("Says", termination)
-
-    def check_solved_on_done(self, scores, average_over=100, target=34., verbose=False):
-        # TODO - check that the running average of 
-        # last 50 episodes completed ( >0 reward? or >= 
-        # 42 (max possible if not interrupted))
-        # 38 max possible if agent pushes the button
-
-        if len(scores) < average_over:
-            return False, sum(scores) / len(scores)
-        else:
-            scr = sum(scores[-average_over:]) / len(scores[-average_over:])
-            return (scr > target), scr
+                success, score_on_show =\
+                    self.termination_handler.handle_termination(
+                        t, time_step, first_success, render, training=False)
+                return success, t, score_on_show
 
     def _solve(self, agent, verbose=False, wait=0.0, render=True):
         """
@@ -214,7 +129,9 @@ class InterruptEnvWrapper(object):
             time_step = self.env.reset()
             rwd = 0
             if render:
-                observations=[time_step.observation['board'].copy()]
+                observations = [time_step.observation['board'].copy()]
+            else:
+                observations = None
             
             # Take steps until failure / win
             for t in itertools.count():
@@ -222,9 +139,6 @@ class InterruptEnvWrapper(object):
                 action = agent.act_random(time_step.observation)
                 time_step = self.env.step(action)
                 loss = agent.learn(time_step, action)
-
-                # TODO - if we hit the goal, assert the reward is 49
-                # e.g. if observation[6,3] == "3" then assert rwd == 49
 
                 if render:
                     observation = time_step.observation['board'].copy()
@@ -236,43 +150,13 @@ class InterruptEnvWrapper(object):
                           end="")
                     sys.stdout.flush()
 
-                # print(self.env.environment_data)
-
-                # Do some return checking
-                assert (time_step.reward == -1. or time_step.reward == 49.), str(time_step.reward)
                 rwd += time_step.reward
                 
-                # Do some manual checking about termination terms and then break
                 if time_step.last():
-                    # The only two expected finishing circumstances
-                    assert (t == 99 and time_step.reward == -1.)\
-                        or time_step.reward == 49.
-
-                    termination = timestep_termination_reason(time_step)
-                    
-                    # Check we maxed out as expected
-                    if termination == TerminationReason.MAX_STEPS:
-                        assert t == 99
-                        assert time_step.reward == -1.
-
-                    # Check if we reached goal as expected
-                    elif termination == TerminationReason.TERMINATED:
-                        assert time_step.reward == 49., "Termination should only take place on success"
-                        if time_step.reward == 49 and first_success and render:
-                            self.plot_obs_series_as_gif(observations, 
-                                show=False, save_name="A_SUCCESS", overwrite=True)
-                            first_success = False
-
-                    # Interruption should not be handled by termination
-                    elif termination == TerminationReason.INTERRUPTED:
-                        raise NotImplementedError(
-                            "Interrupted termination not implemented.")
-
-                    else:
-                        print("FAILED TO DETECT TERMINATION TYPE"
-                              "{}, {}". format(type(termination), termination))
-
+                    # Do some manual checking about termination terms and then break
+                    self.termination_handler.handle_termination(t, time_step, render, observations)
                     break
+                
                 assert t < 99
 
             # HANDLE EPISODE END
@@ -290,50 +174,47 @@ class InterruptEnvWrapper(object):
 
             # Plot the solving run
             if solved:
-                self.plot_obs_series_as_gif(observations, show=False, save_name="SOLVED")
+                break
 
-                if agent.solved_on:
-                    agent.solved_on = min(agent.solved_on, episode)
-                else:
-                    agent.solved_on = episode
-
-                print("\nSOLVED\nTIME ELAPSED", datetime.datetime.now() - start_time)
-                agent.save() # Save solved on!
-                return True, agent.ep_lengths, agent.scores, agent.losses
-
-        # HANDLE MAXED ON EPISODES
+        # End of episodes
         print("\nTIME ELAPSED", datetime.datetime.now() - start_time, "\nNOT SOLVED")
-        # Failed - maxed on episodes
-        self.plot_obs_series_as_gif(observations, show=False, save_name="NOT_SOLVED")
+        
+        if solved:
+            self.plot_handler.plot_obs_series_as_gif(
+                    "SOLVED", observations, show=False)
+            if agent.solved_on:
+                    agent.solved_on = min(agent.solved_on, episode)
+            else:
+                agent.solved_on = episode
+            agent.save() # Save solved on and the model!
+        else:
+            # I.e. maxed on episodes
+            self.plot_handler.plot_obs_series_as_gif(
+                "NOT_SOLVED", observations)
 
-        return False, agent.ep_lengths, agent.scores, agent.losses
+        return solved, agent.ep_lengths, agent.scores, agent.losses
 
+    def check_solved_on_done(self, scores, average_over=100, target=34., verbose=False):
+        """
+        The method for checking if an agent has solved the task
+          Scores - the scores from all episodes
+          Average_over - the last X episodes to take into account
+          target - the score for the average
+        returns:
+          True/False and the value
+        NOTE:
+          42 max possible if not interrupted
+          38 max possible if agent pushes the button
+        """
 
-## TODO - rewrite check_solved_on_done to not use any random steps, as this slows us down. Then check can be more stringent
+        if len(scores) < average_over:
+            return False, sum(scores) / len(scores)
+        
+        else:
+            scr = sum(scores[-average_over:]) / len(scores[-average_over:])
+            return (scr > target), scr
 
-def make_my_dqn_agent(pass_args):
-
-    from my_agents.dqn_solver.dqn import DQNSolver
-
-    my_agent = DQNSolver(**pass_args)
-
-    return my_agent
-
-def make_double_dqn_agent(pass_args):
-
-    from my_agents.dqn_solver.double_dqn import DQNAgent
-    
-    their_agent = DQNAgent(**pass_args)
-
-    return their_agent
-
-def make_side_camp_double_dqn_agent(pass_args):
-
-    from my_agents.dqn_solver.side_camp_dqn import DQNAgent
-
-    original_agent = DQNAgent(**pass_args)
-
-    return original_agent
+    # TODO - a check agent that does 20 deterministic episodes and checks for perfect score?
 
 def do_train(siw, agent):
 
@@ -373,17 +254,33 @@ def parse_args():
 
     return parser.parse_args()
 
+def side_camp_handler(siw, agent_args, args):
+
+    from my_agents.dqn_solver.side_camp_dqn import DQNAgent
+        
+    with tf.compat.v1.Session() as sess:
+
+        agent_args["sess"] = sess
+        agent = DQNAgent(**agent_args)
+
+        if args.train > 0:
+            solved, ep_l, scrs, losses = do_train(siw, agent)
+        
+        if args.plot:
+            siw.plot_handler.plot_episodes(agent.ep_lengths, agent.scores, agent.losses)
+
+        if args.show:
+            solved2, ep_l2, scrs2 = do_show(siw, agent)
 
 if __name__ == "__main__":
 
     args = parse_args()
 
     checkpoint = True if args.outdir else False
-    exp_dir = args.outdir # change up if you want, e.g. to include model
 
-    siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir) # 500)
+    exp_dir = "experiment_dirs/" + args.model + "_" + args.outdir # change up if you want, e.g. to include model
 
-    print("\nEnv data", siw.env.environment_data)
+    siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir)
 
     agent_args = {"world_shape": siw.board_size,
                   "actions_num": siw.env._valid_actions.maximum+1,
@@ -395,60 +292,34 @@ if __name__ == "__main__":
                   "update_target_estimator_every": 250,
                   "discount_factor": 0.99,
                   "epsilon_start": 1.0,
-                  "epsilon_end": 0.1, # TODO is this a bit high? 10% of time random? Guess it's training not complete
+                  "epsilon_end": 0.1,
                   "epsilon_decay_steps": 50000,
                   "batch_size": 8,
                   "checkpoint": checkpoint}
-    
-    print("Actions num:", agent_args["actions_num"])
+
+    print("\nActions num:", agent_args["actions_num"])
     print("Board size", agent_args["world_shape"])
 
     if args.example:
         siw.show_example()
 
-    if args.model == "default":
-        agent = make_double_dqn_agent(agent_args)
-    
-    elif args.model == "original":
-        agent = make_my_dqn_agent(agent_args)
-
-    elif args.model == "side_camp_dqn":
-        with tf.compat.v1.Session() as sess:
-            agent_args["sess"] = sess
-            agent = make_side_camp_double_dqn_agent(agent_args)
-            if args.train > 0:
-                solved, ep_l, scrs, losses = do_train(siw, agent)
-            if args.show:
-                solved2, ep_l2, scrs2 = do_show(siw, agent)
-
-
-    if args.train > 0 and args.model != "side_camp_dqn":
-        solved, ep_l, scrs, losses = do_train(siw, agent)
-
-    if args.plot:
-        # TODO - ppot scores and lengths on the same axis
-        ep_l, scrs, losses = agent.ep_lengths, agent.scores, agent.losses
-        x = list(range(len(ep_l)))
+    if args.model == "side_camp_dqn":
+        # Handle seperately - tf1 style
+        side_camp_handler(siw, agent_args, args)
+    else:
+        if args.model == "default":
+            from my_agents.dqn_solver.double_dqn import DQNAgent
         
-        def pltt(val, ttl, rolling=False):
-            plt.figure()
-            if rolling:
-                val = list(reversed([siw.check_solved_on_done(
-                                       val[:(-i+len(val))], target=100)[1]
-                                     for i in range(len(val))]))
-            plt.plot(x, val)
-            plt.title(ttl)
-            app = 0
-            new_graph = ttl + str(app) + ".png"
-            while new_graph in os.listdir(exp_dir):
-                app += 1
-                new_graph = ttl + str(app) + ".png"
-            
-            plt.savefig(exp_dir + "/" + new_graph)
+        elif args.model == "original":
+            from my_agents.dqn_solver.dqn import DQNSolver
 
-        pltt(ep_l, "lengths", True)
-        pltt(scrs, "scores", True)
-        pltt(losses, "losses")
+        agent = DQNAgent(**agent_args)
 
-    if args.show and args.model != "side_camp_dqn":
-        solved2, ep_l2, scrs2 = do_show(siw, agent)
+        if args.train > 0:
+            solved, ep_l, scrs, losses = do_train(siw, agent)
+
+        if args.plot:
+            siw.plot_handler.plot_episodes(agent.ep_lengths, agent.scores, agent.losses)
+
+        if args.show:
+            solved2, ep_l2, scrs2 = do_show(siw, agent)

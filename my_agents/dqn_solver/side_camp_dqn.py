@@ -295,7 +295,7 @@ class DQNAgent(StandardAgent):
             else:
                 raise ve
 
-        super(DQNAgent, self).load_dict()
+        super(DQNAgent, self).load_param_dict()
 
     def save(self, solved=False):
 
@@ -307,4 +307,4 @@ class DQNAgent(StandardAgent):
             assert out_name == self.checkpoint_path
         
         # Save the dict
-        super(DQNAgent, self).save()
+        super(DQNAgent, self).save_param_dict()
