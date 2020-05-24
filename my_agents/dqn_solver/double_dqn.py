@@ -54,11 +54,11 @@ class DQNAgent(StandardAgent):
                          batch_size, checkpoint)
         
         # Set target weights after loading in q network from super
-        self.target_q.model = tf.keras.models.clone_model(self.q.model)
+        # self.target_q.model = tf.keras.models.clone_model(self.q.model)
         self.target_q.model.set_weights(self.q.model.get_weights())
         self.target_q.model.summary()
 
-    def act_random(self, obs, eps=None):
+    def act(self, obs, eps=None):
         """
         Act with randomness
         """
@@ -67,15 +67,20 @@ class DQNAgent(StandardAgent):
         state = self.get_state(obs)
         probs = self.policy_fn(state, eps) # Probability over actions
         self.prev_state = state
-        return np.random.choice(self.actions_num, p=probs)
+        choice = np.random.choice(self.actions_num, p=probs)
+        if eps == 0.:
+            assert np.max(probs) == 1.
+            assert np.sum(probs) == 1.
+            assert np.argmax(probs) == choice
+        return choice
 
-    def act_determine(self, obs, eps=None):
-        """
-        Act without randomness
-        """
-        state = self.get_state(obs)
-        self.prev_state = state
-        return np.argmax(self.q.model(state))
+    # def act_determine(self, obs, eps=None):
+    #     """
+    #     Act without randomness
+    #     """
+    #     state = self.get_state(obs)
+    #     self.prev_state = state
+    #     return np.argmax(self.q.model(state))
 
     def policy_fn(self, observation, epsilon):
         """
@@ -108,7 +113,7 @@ class DQNAgent(StandardAgent):
 
         # Take a sample from the replay memory
         sample_i = np.random.choice(len(self.replay_memory), self.batch_size)
-        sample = [self.replay_memory[i] for i in sample_i] # Avoid creating whole list
+        sample = [self.replay_memory[i] for i in sample_i]
 
         # Update the Q network with this sample
         loss_value = self.take_training_step(*tuple(map(np.array, zip(*sample))))
@@ -122,10 +127,12 @@ class DQNAgent(StandardAgent):
     @tf.function
     def take_training_step(self, sts, a, r, n_sts, d):
 
-        future_max_q = tf.reduce_max(self.target_q.model(n_sts), axis=1)
-        q_target = tf.where(d, r, r + self.discount_factor * future_max_q)
+        future_q = tf.reduce_max(self.target_q.model(n_sts), axis=1)
+        adj_future_q = tf.where(d, 0., future_q)
+        
+        q_targets = r + self.discount_factor * adj_future_q
 
-        loss_value, grads = self.squared_diff_loss_at_a(sts, a, q_target)
+        loss_value, grads = self.squared_diff_loss_at_a(sts, a, q_targets)
 
         self.q.optimizer.apply_gradients(zip(grads, self.q.model.trainable_variables))
 
@@ -151,8 +158,8 @@ class DQNAgent(StandardAgent):
 
     def save(self):
         # Save the Q model (Target Q is a copy)
-        if self.checkpoint_dir:
-            self.q.save_model(self.checkpoint_dir)
+        if self.checkpoint:
+            self.q.save_model(self.checkpoint_path)
 
         # And save the param dict
         super(DQNAgent, self).save_param_dict()
@@ -160,7 +167,9 @@ class DQNAgent(StandardAgent):
     def load(self):
 
         # Load the Q model
-        self.q.load_model_cp(self.checkpoint_path)
+        successful_model_load = self.q.load_model_cp(self.checkpoint_path)
 
         # Load the experiment state
-        super(DQNAgent, self).load_param_dict()
+        successful_dict_load = super(DQNAgent, self).load_param_dict()
+
+        self.loaded_model = successful_model_load and successful_dict_load

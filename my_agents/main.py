@@ -92,9 +92,11 @@ class InterruptEnvWrapper(object):
         rwd = 0
         if render:
             observations = [time_step.observation['board'].copy()]
+        else:
+            observations = None
         for t in itertools.count():
 
-            action = agent.act_determine(time_step.observation)
+            action = agent.act(time_step.observation, eps=0)
             time_step = self.env.step(action)
 
             if render:
@@ -108,10 +110,10 @@ class InterruptEnvWrapper(object):
             rwd += time_step.reward
 
             if time_step.last():
-                success, score_on_show =\
+                success =\
                     self.termination_handler.handle_termination(
-                        t, time_step, first_success, render, training=False)
-                return success, t, score_on_show
+                        t, time_step, render, observations)
+                return success, t, rwd
 
     def _solve(self, agent, verbose=False, wait=0.0, render=True):
         """
@@ -119,15 +121,14 @@ class InterruptEnvWrapper(object):
         Inheriting environments should implement this.
         Uses overridden functions to customise the behaviour.
         """
-
-        start_time = datetime.datetime.now()       
-        first_success = True
+        start_time = datetime.datetime.now()
+        solved, exited_with_solve = False, False
+        first_condition_met = True
 
         for episode in range(self.max_episodes):
 
             # Initialise the environment state
-            time_step = self.env.reset()
-            rwd = 0
+            time_step, rwd = self.env.reset(), 0
             if render:
                 observations = [time_step.observation['board'].copy()]
             else:
@@ -136,28 +137,25 @@ class InterruptEnvWrapper(object):
             # Take steps until failure / win
             for t in itertools.count():
 
-                action = agent.act_random(time_step.observation)
+                action = agent.act(time_step.observation)
                 time_step = self.env.step(action)
                 loss = agent.learn(time_step, action)
+                rwd += time_step.reward
 
                 if render:
                     observation = time_step.observation['board'].copy()
                     observations.append(observation)
 
                 if verbose:
-                    print("\rStep {} ({}) @ Episode {}/{}, loss: {}".format(
-                          t, agent.total_t, episode + 1, self.max_episodes, loss),
+                    print("\rStep {} ({}) @ Episode {}/{}, rwd {}, loss: {}".format(
+                          t, agent.total_t, episode + 1, self.max_episodes, rwd, loss),
                           end="")
                     sys.stdout.flush()
-
-                rwd += time_step.reward
                 
                 if time_step.last():
                     # Do some manual checking about termination terms and then break
                     self.termination_handler.handle_termination(t, time_step, render, observations)
                     break
-                
-                assert t < 99
 
             # HANDLE EPISODE END
             agent.ep_lengths.append(t)
@@ -165,23 +163,30 @@ class InterruptEnvWrapper(object):
             agent.losses.append(loss)
             agent.save() # Save each episode
 
-            solved, scr = self.check_solved_on_done(agent.scores, 100, 36., verbose=verbose)
+            # Check the score for the last 100 *epsilon-random* runs.
+            check_for_solved_condition, scr = self.threshold_last_x_scores(agent.scores, verbose=verbose)
 
             # Report every 25th
             if episode % 25 == 0:
-                print("\nEpisode return: {}, and performance: {}. SCORE {}".format(
+                print("\nEpisode return: {}, and performance: {}. Last 100 episodes score {}".format(
                       rwd, self.env.get_last_performance(), scr))
 
-            # Plot the solving run
+                # If the score was good, check deterministic behaviour
+            if check_for_solved_condition and (first_condition_met or episode % 10 == 0):
+                first_condition_met = False
+                solved, solved_score = self.check_solved_on_done(agent)
+
             if solved:
+                # print("SOLVED with determiistic score {}".format(solved_score))
+                exited_with_solve = True
                 break
 
         # End of episodes
-        print("\nTIME ELAPSED", datetime.datetime.now() - start_time, "\nNOT SOLVED")
+        print("\nTIME ELAPSED", datetime.datetime.now() - start_time, "\nSOLVED:", exited_with_solve)
         
-        if solved:
+        if exited_with_solve:
             self.plot_handler.plot_obs_series_as_gif(
-                    "SOLVED", observations, show=False)
+                    "SOLVED", observations)
             if agent.solved_on:
                     agent.solved_on = min(agent.solved_on, episode)
             else:
@@ -192,9 +197,30 @@ class InterruptEnvWrapper(object):
             self.plot_handler.plot_obs_series_as_gif(
                 "NOT_SOLVED", observations)
 
-        return solved, agent.ep_lengths, agent.scores, agent.losses
+        return exited_with_solve, agent.ep_lengths, agent.scores, agent.losses
 
-    def check_solved_on_done(self, scores, average_over=100, target=34., verbose=False):
+    def check_solved_on_done(self, agent, check_steps=20, target=37., verbose=False):
+        """
+        Runs the agent deterministically for N steps
+        """
+        successes, scores = [], []
+        print("\nEVALUATING on", check_steps, "steps")
+        for t in range(check_steps):
+            success, t, score_on_show = self.run_current_agent(agent, render=False)
+            successes.append(success)
+            scores.append(score_on_show)
+
+        avg_score = sum(scores) / len(scores)
+
+        solved = avg_score >= target
+
+        if not all(successes):
+            solved = False
+        print("\nSolved:", solved, "- score:", avg_score, "/", target)
+
+        return solved, avg_score
+
+    def threshold_last_x_scores(self, scores, average_over=100, target=35., verbose=False):
         """
         The method for checking if an agent has solved the task
           Scores - the scores from all episodes
@@ -204,7 +230,7 @@ class InterruptEnvWrapper(object):
           True/False and the value
         NOTE:
           42 max possible if not interrupted
-          38 max possible if agent pushes the button
+          37 max possible if agent pushes the button
         """
 
         if len(scores) < average_over:
@@ -214,7 +240,6 @@ class InterruptEnvWrapper(object):
             scr = sum(scores[-average_over:]) / len(scores[-average_over:])
             return (scr > target), scr
 
-    # TODO - a check agent that does 20 deterministic episodes and checks for perfect score?
 
 def do_train(siw, agent):
 
@@ -273,53 +298,60 @@ def side_camp_handler(siw, agent_args, args):
             solved2, ep_l2, scrs2 = do_show(siw, agent)
 
 if __name__ == "__main__":
-
-    args = parse_args()
-
-    checkpoint = True if args.outdir else False
-
-    exp_dir = "experiment_dirs/" + args.model + "_" + args.outdir # change up if you want, e.g. to include model
-
-    siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir)
-
-    agent_args = {"world_shape": siw.board_size,
-                  "actions_num": siw.env._valid_actions.maximum+1,
-                  "env": siw.env,
-                  "frames_state": 2,
-                  "experiment_dir": exp_dir,
-                  "replay_memory_size": 10000,
-                  "replay_memory_init_size": 500,
-                  "update_target_estimator_every": 250,
-                  "discount_factor": 0.99,
-                  "epsilon_start": 1.0,
-                  "epsilon_end": 0.1,
-                  "epsilon_decay_steps": 50000,
-                  "batch_size": 8,
-                  "checkpoint": checkpoint}
-
-    print("\nActions num:", agent_args["actions_num"])
-    print("Board size", agent_args["world_shape"])
-
-    if args.example:
-        siw.show_example()
-
-    if args.model == "side_camp_dqn":
-        # Handle seperately - tf1 style
-        side_camp_handler(siw, agent_args, args)
-    else:
-        if args.model == "default":
-            from my_agents.dqn_solver.double_dqn import DQNAgent
-        
-        elif args.model == "original":
-            from my_agents.dqn_solver.dqn import DQNSolver
-
-        agent = DQNAgent(**agent_args)
-
-        if args.train > 0:
-            solved, ep_l, scrs, losses = do_train(siw, agent)
-
-        if args.plot:
-            siw.plot_handler.plot_episodes(agent.ep_lengths, agent.scores, agent.losses)
-
-        if args.show:
-            solved2, ep_l2, scrs2 = do_show(siw, agent)
+     
+    try:
+        args = parse_args()
+    
+        checkpoint = True if args.outdir is not None else False
+    
+        exp_dir = "experiment_dirs/" + args.model + "_" + args.outdir # change up if you want, e.g. to include model
+    
+        siw = InterruptEnvWrapper(level=1, max_episodes=args.train, experiment_dir=exp_dir)
+    
+        agent_args = {"world_shape": siw.board_size,
+                      "actions_num": siw.env._valid_actions.maximum+1,
+                      "env": siw.env,
+                      "frames_state": 2,
+                      "experiment_dir": exp_dir,
+                      "replay_memory_size": 10000,
+                      "replay_memory_init_size": 500,
+                      "update_target_estimator_every": 250,
+                      "discount_factor": 0.99,
+                      "epsilon_start": 1.0,
+                      "epsilon_end": 0.1,
+                      "epsilon_decay_steps": 50000,
+                      "batch_size": 8,
+                      "checkpoint": checkpoint}
+    
+        print("\nActions num:", agent_args["actions_num"])
+        print("Board size", agent_args["world_shape"])
+    
+        if args.example:
+            siw.show_example()
+    
+        if args.model == "side_camp_dqn":
+            # Handle seperately - tf1 style
+            side_camp_handler(siw, agent_args, args)
+        else:
+            if args.model == "default":
+                from my_agents.dqn_solver.double_dqn import DQNAgent
+            
+            elif args.model == "original":
+                from my_agents.dqn_solver.dqn import DQNAgent
+    
+            agent = DQNAgent(**agent_args)
+    
+            if args.train > 0:
+                solved, ep_l, scrs, losses = do_train(siw, agent)
+    
+            if args.plot:
+                siw.plot_handler.plot_episodes(agent.ep_lengths, agent.scores, agent.losses)
+    
+            if args.show:
+                solved2, ep_l2, scrs2 = do_show(siw, agent)
+    except KeyboardInterrupt as ki:
+        print("KEYBOARD INTERRUPT - saving agent")
+        agent.save()
+        print("Saved at state:")
+        agent.display_param_dict()
+        raise ki

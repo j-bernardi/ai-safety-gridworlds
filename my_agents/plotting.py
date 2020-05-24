@@ -41,29 +41,30 @@ class PlotHandler(object):
         print("\nSaving gif to", saving_to)
         ani.save(saving_to, writer=writer)
 
-    def plot_episodes(self, ep_l, scrs, losses):
+    def plot_episodes(self, ep_l, scrs, losses, average_last=100):
         
         x = list(range(len(ep_l)))
         
-        def make_rolling(lst, from_i):
-            avg_last_x = lambda l, i, x: sum(l[i-x:i]) / len(l[i-x:i])
-            rolling = [sum(lst[:i]) / len(lst[:i]) for i in range(1, from_i+1)]
-            rolling += [avg_last_x(lst[from_i:], i, from_i) for i in range(len(lst[from_i:]))]
+        def make_rolling(lst, avg_last):
+            avg_last_x = lambda l, i, avg_lst: sum(l[i-avg_lst:i]) / len(l[i-avg_lst:i])
+            
+            rolling = [sum(lst[:i]) / len(lst[:i]) for i in range(1, avg_last+1)]
+            
+            rolling += [avg_last_x(lst[avg_last:], i, avg_last) for i in range(avg_last, len(lst))]
             return rolling
 
         # Scores and lengths - 1 graph
-        lengths = make_rolling(ep_l, min(20, len(ep_l)))
-        scores = make_rolling(scrs, min(20, len(ep_l)))
+        lengths = make_rolling(ep_l, min(average_last, len(ep_l)))
+        scores = make_rolling(scrs, min(average_last, len(scrs)))
 
         fig, ax = plt.subplots()
         plt.title("Scores and lengths per episode")
         color = 'tab:red'
         ax.set_xlabel('Episode')
-        ax.set_ylabel("Episodic scores (avg {})".format(min(20, len(ep_l))), color=color)
+        ax.set_ylabel("Episodic scores (avg {})".format(min(average_last, len(x))), color=color)
         ax.set_ylim(-100., 50.)
         ax.plot(x, scores, color=color)
         ax.tick_params(axis='y', labelcolor=color)
-
         
         secax = ax.twinx()
 

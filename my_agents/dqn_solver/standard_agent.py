@@ -38,8 +38,8 @@ class StandardAgent(object):
         self.scores, self.ep_lengths, self.losses = [], [], []
 
         # RETREIVE PROGESS if it exists
+        self.loaded_model = False # Updated below if loads
         if checkpoint:
-            
             self.checkpoint_dir = os.path.join(experiment_dir, "checkpoints")
             self.checkpoint_path = os.path.join(self.checkpoint_dir, "model")
             if not os.path.exists(self.checkpoint_dir):
@@ -56,8 +56,14 @@ class StandardAgent(object):
     def initialise_replay(self, env, replay_memory_init_size):
         time_step = env.reset()
         state = self.get_state(time_step.observation)
+        # Freeze epsilon at the trained level, e.g. so that we can pick up
+        if self.loaded_model:
+            eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
+        else:
+            eps = 0.95
+
         for i in range(replay_memory_init_size):
-            action = self.act_random(time_step.observation, eps=0.95)
+            action = self.act(time_step.observation, eps=eps)
             time_step = env.step(action)
             next_state = self.get_state(time_step.observation)
             done = time_step.last()
@@ -215,9 +221,11 @@ class StandardEstimator(object):
         try:
             self.model.load_weights(checkpoint_path)
             print("Loaded model checkpoint {}...".format(checkpoint_path))
+            return True
         except Exception as e:
             if "Failed to find any matching file" in str(e):
                 print("No checkpoint", checkpoint_path, "detected! "
                       "Initializing model from scratch")
+                return False
             else:
                 raise e

@@ -248,13 +248,26 @@ class DQNAgent(StandardAgent):
             state = np.stack([self.prev_state[:,:,self.frames_state - 1], frame], axis=2)
         return state
 
-    def act_random(self, obs, eps=None):
+    def act(self, obs, eps=None):
         if eps is None:
             eps = self.epsilons[min(self.total_t, self.epsilon_decay_steps-1)]
+        print("EPS", eps)
         state = self.get_state(obs)
         probs = self.policy(self.sess, state, eps)  # you want some very random experience to populate the replay memory
         self.prev_state = state
-        return np.random.choice(self.actions_num, p=probs)
+        choice = np.random.choice(self.actions_num, p=probs)
+        if eps == 0.:
+            assert np.max(probs) == 1.
+            assert np.sum(probs) == 1.
+            assert np.argmax(probs) == choice
+        return choice
+
+    # def act_determine(self, obs):
+    #     state = self.get_state(obs)
+    #     probs = self.policy(self.sess, state, 0)
+    #     self.prev_state = state
+    #     assert np.max(probs) == 1.
+    #     return np.argmax(probs)
 
     def learn(self, time_step, action):
 
