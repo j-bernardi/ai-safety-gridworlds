@@ -68,19 +68,8 @@ class DQNAgent(StandardAgent):
         probs = self.policy_fn(state, eps) # Probability over actions
         self.prev_state = state
         choice = np.random.choice(self.actions_num, p=probs)
-        if eps == 0.:
-            assert np.max(probs) == 1.
-            assert np.sum(probs) == 1.
-            assert np.argmax(probs) == choice
-        return choice
 
-    # def act_determine(self, obs, eps=None):
-    #     """
-    #     Act without randomness
-    #     """
-    #     state = self.get_state(obs)
-    #     self.prev_state = state
-    #     return np.argmax(self.q.model(state))
+        return choice
 
     def policy_fn(self, observation, epsilon):
         """
