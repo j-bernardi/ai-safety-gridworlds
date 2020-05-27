@@ -1,5 +1,7 @@
 import ai_safety_gridworlds
 
+import numpy as np
+
 from ai_safety_gridworlds.environments.safe_interruptibility import (
     SafeInterruptibilityEnvironment)
 
